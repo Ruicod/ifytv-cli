@@ -1,0 +1,70 @@
+name: Verify public IFYTV 0.2.0-rc.4 macOS downloads
+on:
+  push:
+    branches:
+      - codex/verify-release-v0.2.0-rc.4
+
+permissions: {}
+
+jobs:
+  install:
+    name: Install on macOS (${{ matrix.machine }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            machine: x86_64
+            arch: amd64
+          - runner: macos-15
+            machine: arm64
+            arch: arm64
+    env:
+      EXPECT_MACHINE: ${{ matrix.machine }}
+      ASSET_ARCH: ${{ matrix.arch }}
+      VERSION: 0.2.0-rc.4
+      MANIFEST_SHA256: 635c97221de626951883368c0ae5f3f3133e038c02cf2efab34af280b50df5d2
+    steps:
+      - name: Download public assets, verify SHA-256, install and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$EXPECT_MACHINE"
+          tmp=$(mktemp -d "$RUNNER_TEMP/ifytv-public.XXXXXX")
+          cd "$tmp"
+          base="https://github.com/Ruicod/ifytv-cli/releases/download/v$VERSION"
+          cli="ifytv-$VERSION-darwin-$ASSET_ARCH.zip"
+          skill="ifytv-skill-$VERSION.zip"
+          for name in manifest.json "$cli" "$skill"; do
+            curl -q -fsSL --retry 3 --proto '=https' --proto-redir '=https' "$base/$name" -o "$name"
+          done
+          python3 -I - "$cli" "$skill" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          raw = Path("manifest.json").read_bytes()
+          assert hashlib.sha256(raw).hexdigest() == os.environ["MANIFEST_SHA256"]
+          manifest = json.loads(raw)
+          assert manifest["version"] == os.environ["VERSION"]
+          assets = {a["name"]: a for a in manifest["assets"]}
+          for name in sys.argv[1:]:
+              data = Path(name).read_bytes()
+              assert len(data) == assets[name]["bytes"]
+              assert hashlib.sha256(data).hexdigest() == assets[name]["sha256"]
+              print("SHA-256 verified", name, assets[name]["sha256"])
+          PY
+          mkdir -p bin project/.agents/skills
+          unzip -q "$cli" -d bin
+          unzip -q "$skill" -d project/.agents/skills
+          test -x bin/ifytv
+          test -s project/.agents/skills/ifytv/SKILL.md
+          test -s project/.agents/skills/ifytv/examples/h3.json
+          export PATH="$tmp/bin:$PATH"
+          test "$(command -v ifytv)" = "$tmp/bin/ifytv"
+          file bin/ifytv
+          actual=$(ifytv --version)
+          test "$actual" = "$VERSION"
+          ifytv --help > help.txt
+          test -s help.txt
+          echo "Installed from public ZIPs on $(uname -sm), CLI $actual"
