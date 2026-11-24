@@ -210,3 +210,21 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/Ruicod/ifytv-cli/v0.2.0-rc.5/skills/ifytv/SKILL.md > "$RUNNER_TEMP/tagged.md"
           found=$(find -L "$HOME/.agents" "$HOME/.config/opencode" -path '*/skills/ifytv/SKILL.md' -print -quit 2>/dev/null || true)
           cmp "$found" "$RUNNER_TEMP/tagged.md"
+  compatibility:
+    name: Source build / Go 1.22
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.12'
+          cache: false
+      - name: Verify all commands, archives and the real embedded Skill using the minimum supported compiler
+        run: |
+          go version
+          go test ./... -count=1
