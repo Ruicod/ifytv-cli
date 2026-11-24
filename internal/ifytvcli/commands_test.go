@@ -30,7 +30,13 @@ func testSite(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	s := httptest.NewServer(handler)
 	t.Cleanup(s.Close)
 	t.Setenv("IFYTV_BASE_URL", s.URL)
-	t.Setenv("IFYTV_STATE_DIR", t.TempDir())
+	// Windows temporary folders may inherit ACLs granting other accounts
+	// modify access. Create a private state root as a real fresh install does.
+	root := filepath.Join(t.TempDir(), "state")
+	if err := ensureStateDir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("IFYTV_STATE_DIR", root)
 	t.Setenv("IFYTV_API_KEY", testKey)
 	return s
 }
@@ -120,6 +126,10 @@ func TestVersionHelpAndPublicCatalog(t *testing.T) {
 func TestTaskTargetValidationAndCredentialDenial(t *testing.T) {
 	var calls atomic.Int32
 	testSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/device/start" && r.Header.Get("Authorization") == "" {
+			jsonReply(w, 200, challengeJSON)
+			return
+		}
 		calls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer "+testKey {
 			t.Error("missing credential")
@@ -143,11 +153,11 @@ func TestTaskTargetValidationAndCredentialDenial(t *testing.T) {
 	}
 	t.Setenv("IFYTV_API_KEY", "")
 	o := invoke(context.Background(), "canvas", "import", "--task", taskID, "--project", projectID, "--json").result(t, false)
-	if o["task_id"] != taskID || o["project_id"] != projectID {
+	if o["task_id"] != taskID || o["project_id"] != projectID || o["error"].(map[string]any)["code"] != "authorization_required" {
 		t.Fatal("missing original task/project on authentication failure", o)
 	}
 	if calls.Load() != 1 {
-		t.Fatal("missing key reached the gateway")
+		t.Fatal("a protected endpoint was called before approval")
 	}
 }
 

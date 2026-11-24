@@ -48,8 +48,10 @@ type asset struct {
 }
 
 type manifest struct {
-	Version string  `json:"version"`
-	Assets  []asset `json:"assets"`
+	Version             string  `json:"version"`
+	DeviceAuthorization bool    `json:"device_authorization"`
+	CanvasGeneration    bool    `json:"canvas_generation"`
+	Assets              []asset `json:"assets"`
 }
 
 type zipEntry struct {
@@ -107,7 +109,7 @@ func pack(out, version string) (err error) {
 	if err != nil {
 		return err
 	}
-	doc := manifest{Version: version}
+	doc := manifest{Version: version, DeviceAuthorization: true, CanvasGeneration: true}
 	for _, target := range platforms {
 		program, err := buildCLI(stage, version, target)
 		if err != nil {

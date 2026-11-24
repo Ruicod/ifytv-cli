@@ -12,10 +12,11 @@ import (
 )
 
 type failure struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-	retryAfter time.Duration
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	HTTPStatus    int    `json:"http_status,omitempty"`
+	retryAfter    time.Duration
+	invalidDevice bool
 }
 
 func fail(code, message string) *failure { return &failure{Code: code, Message: message} }
@@ -28,6 +29,9 @@ func contextFailure(ctx context.Context) *failure {
 }
 
 func (f *failure) retryable() bool {
+	if f.Code == "canvas_asset_daily_limit" {
+		return false
+	}
 	return f.Code == "network_error" || f.HTTPStatus == 429 || f.HTTPStatus == 502 || f.HTTPStatus == 503 || f.HTTPStatus == 504
 }
 
@@ -48,6 +52,9 @@ type output struct {
 	ProjectURL       string        `json:"project_url,omitempty"`
 	Duplicate        *bool         `json:"duplicate,omitempty"`
 	AuthorizationURL string        `json:"authorization_url,omitempty"`
+	AuthorizationID  string        `json:"authorization_id,omitempty"`
+	UserCode         string        `json:"user_code,omitempty"`
+	Source           string        `json:"source,omitempty"`
 	Path             string        `json:"path,omitempty"`
 	Bytes            int64         `json:"bytes,omitempty"`
 	Models           *[]capability `json:"models,omitempty"`
@@ -56,7 +63,7 @@ type output struct {
 	Error            *failure      `json:"error,omitempty"`
 }
 
-func render(stdout, stderr io.Writer, result output, jsonMode bool, key string) error {
+func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...string) error {
 	if jsonMode {
 		data, err := json.Marshal(result)
 		if err != nil {
@@ -64,14 +71,20 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, key string) 
 		}
 		// Scrub string values before serialization so even punctuation in a key
 		// cannot corrupt the JSON or leak through JSON escaping.
-		quoted, _ := json.Marshal(key)
-		if key != "" && bytes.Contains(data, quoted[1:len(quoted)-1]) {
-			var value map[string]any
-			if err := json.Unmarshal(data, &value); err != nil {
-				return err
+		for _, key := range secrets {
+			quoted, _ := json.Marshal(key)
+			if key != "" && bytes.Contains(data, quoted[1:len(quoted)-1]) {
+				var value map[string]any
+				if err := json.Unmarshal(data, &value); err != nil {
+					return err
+				}
+				for _, secret := range secrets {
+					if secret != "" {
+						redactValues(value, secret)
+					}
+				}
+				return json.NewEncoder(stdout).Encode(value)
 			}
-			redactValues(value, key)
-			return json.NewEncoder(stdout).Encode(value)
 		}
 		_, err = fmt.Fprintln(stdout, string(data))
 		return err
@@ -103,11 +116,28 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, key string) 
 		lines = append(lines, result.ProjectURL)
 	}
 	if result.AuthorizationURL != "" {
-		lines = append(lines, "Authorize this project at "+result.AuthorizationURL)
+		if result.UserCode != "" {
+			lines = append(lines, "Open "+result.AuthorizationURL+" and confirm code "+result.UserCode+".",
+				"Run ifytv auth wait --authorization-id "+result.AuthorizationID+" to finish this sign-in.")
+		} else {
+			lines = append(lines, "Authorize this project at "+result.AuthorizationURL)
+		}
+	} else if result.Status == "authenticated" {
+		if result.Source == "environment" {
+			lines = append(lines, "Authenticated using IFYTV_API_KEY.")
+		} else {
+			lines = append(lines, "Authenticated on this device.")
+		}
+	} else if result.Status == "signed_out" {
+		lines = append(lines, "Signed out.")
+	} else if result.Status == "cancellation_pending" {
+		lines = append(lines, "Device sign-in cancellation is pending. Run ifytv auth logout to finish.")
 	}
 	for _, line := range lines {
-		if key != "" {
-			line = strings.ReplaceAll(line, key, "[redacted]")
+		for _, key := range secrets {
+			if key != "" {
+				line = strings.ReplaceAll(line, key, "[redacted]")
+			}
 		}
 		line = strings.Map(func(r rune) rune {
 			if unicode.IsControl(r) {

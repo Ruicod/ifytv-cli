@@ -6,12 +6,17 @@ import (
 	"path/filepath"
 )
 
+type canvasRunRequest struct {
+	Spec  json.RawMessage `json:"spec"`
+	Names []string        `json:"reference_names"`
+}
+
 func runConflict() *failure {
 	return fail("run_conflict", "The spec or reference contents changed. Restore the original inputs or choose a new run name.")
 }
 
 func (c *client) create(ctx context.Context, o options) (output, *failure) {
-	result := output{Run: o.run}
+	result := output{Run: o.run, ProjectID: o.project}
 	spec, specHash, problem := readSpec(o.spec)
 	if problem != nil {
 		return result, problem
@@ -20,11 +25,18 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 	if problem != nil {
 		return result, problem
 	}
-	defer file.lock.Close()
+	defer file.unlock()
 	r, problem := file.load()
 	if problem != nil {
 		return result, problem
 	}
+	if r != nil && o.project != "" && r.ProjectID != o.project {
+		return result, fail("run_project_conflict", "This name belongs to a different destination. Resume the original run or choose a new name for a separate video.")
+	}
+	if r != nil {
+		o.project = r.ProjectID
+	}
+	c.addCanvasLocation(&result, o.project, "")
 	refs := spec.references()
 	if r != nil && (r.SpecHash != specHash || len(r.Refs) != len(refs)) {
 		return result, runConflict()
@@ -42,6 +54,7 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 	}
 	if r != nil && r.Task != nil {
 		result.TaskID, result.Task = r.Task.ID, r.Task.Task
+		c.addCanvasLocation(&result, r.ProjectID, r.Task.NodeID)
 		return withTaskStatus(result)
 	}
 	if r == nil || r.Stage == "uploading" {
@@ -58,6 +71,10 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 				return result, fail("state_unavailable", "Cannot generate a secure idempotency key.")
 			}
 			r = &record{Version: 1, Stage: "uploading", Key: key, SpecHash: specHash, Refs: make([]savedRef, len(refs))}
+			if o.project != "" {
+				// Older binaries must not resume an on-canvas run through /tasks.
+				r.Version, r.ProjectID = 2, o.project
+			}
 			for i, ref := range refs {
 				r.Refs[i].Hash = ref.hash
 				if ref.path == "" {
@@ -75,6 +92,16 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 			*ref.value = r.Refs[i].URL
 		}
 		payload, err := json.Marshal(spec)
+		if err == nil && r.ProjectID != "" {
+			names := make([]string, len(refs))
+			for i, ref := range refs {
+				names[i] = ref.label
+				if ref.path != "" {
+					names[i] = filepath.Base(ref.path)
+				}
+			}
+			payload, err = json.Marshal(canvasRunRequest{Spec: payload, Names: names})
+		}
 		if err != nil {
 			return result, fail("invalid_spec", "Could not encode the resolved spec.")
 		}
@@ -86,14 +113,25 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 	// From this point on even a lost or malformed response is ambiguous.
 	// Every retry sends only the previously committed key and exact bytes.
 	var reply taskReply
-	if problem := c.json(ctx, "POST", "/api/v1/tasks", r.Payload, r.Key, true, &reply); problem != nil {
+	path := "/api/v1/tasks"
+	if r.ProjectID != "" {
+		path = "/api/v1/cli/projects/" + r.ProjectID + "/runs"
+	}
+	if problem := c.json(ctx, "POST", path, r.Payload, r.Key, true, &reply); problem != nil {
+		if r.ProjectID != "" {
+			c.addProjectConsent(&result, problem)
+		}
 		return result, problem
 	}
 	if problem := reply.validate(""); problem != nil {
 		return result, problem
 	}
+	if problem := reply.validateProject(r.ProjectID); problem != nil {
+		return result, problem
+	}
 	r.Task, r.Stage = &reply, "submitted"
 	result.TaskID, result.Task = reply.ID, reply.Task
+	c.addCanvasLocation(&result, r.ProjectID, reply.NodeID)
 	if problem := file.save(r); problem != nil {
 		return result, problem
 	}
@@ -111,7 +149,7 @@ func withTaskStatus(result output) (output, *failure) {
 	return result, nil
 }
 
-func (c *client) uploadMissing(ctx context.Context, refs []reference, r *record, file *runFile) *failure {
+func (c *client) uploadMissing(ctx context.Context, refs []reference, r *record, file *stateFile) *failure {
 	const parallelism = 4 // The gateway's default concurrent upload limit.
 	type completed struct {
 		index   int

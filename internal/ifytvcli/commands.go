@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -13,15 +14,22 @@ import (
 )
 
 const help = `ifytv models [--json]
-ifytv video create --spec FILE --run NAME [--json]
+ifytv auth login [--json]
+ifytv auth wait [--authorization-id ID] [--timeout DURATION] [--json]
+ifytv auth status [--json]
+ifytv auth logout [--json]
+ifytv video create --spec FILE --run NAME [--project UUID] [--json]
 ifytv video status (--run NAME | --task UUID) [--json]
 ifytv video wait (--run NAME | --task UUID) [--interval 4s] [--timeout DURATION] [--json]
 ifytv video download (--run NAME | --task UUID) --out FILE [--json]
 ifytv canvas import --project UUID (--run NAME | --task UUID) [--json]
 ifytv --version
 
-Set IFYTV_API_KEY for authenticated commands. IFYTV_BASE_URL selects the site.
-Local references are relative to the JSON spec. Repeat create with the same
+Sign in with ifytv auth login, open the printed link, then run ifytv auth wait.
+IFYTV_API_KEY overrides the saved login. IFYTV_BASE_URL selects the site.
+Use --authorization-id ID on video and canvas commands to require one specific device approval.
+With --project, the canvas shows the references and prompt before generation.
+The same video card shows progress and plays the result. Repeat create with the same
 run name and inputs to resume. IFYTV_STATE_DIR overrides the private run directory.`
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -33,6 +41,7 @@ func validUUID(id string) bool {
 
 type options struct {
 	command, spec, run, task, project, out string
+	authorizationID                        string
 	interval, timeout                      time.Duration
 }
 
@@ -44,19 +53,32 @@ func parseArgs(args []string) (options, *failure) {
 	}
 	o.command = args[0]
 	args = args[1:]
-	if (o.command == "video" || o.command == "canvas") && len(args) > 0 {
+	if (o.command == "video" || o.command == "canvas" || o.command == "auth") && len(args) > 0 {
 		o.command += " " + args[0]
 		args = args[1:]
 	}
 	f := flag.NewFlagSet("ifytv", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	switch o.command {
-	case "--help", "-h", "help", "video --help", "canvas --help", "video -h", "canvas -h":
+	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import":
+		f.Func("authorization-id", "", func(id string) error {
+			if !validRunScope(id) || (o.authorizationID != "" && o.authorizationID != id) {
+				return errors.New("invalid authorization ID")
+			}
+			o.authorizationID = id
+			return nil
+		})
+	}
+	switch o.command {
+	case "--help", "-h", "help", "video --help", "canvas --help", "auth --help", "video -h", "canvas -h", "auth -h":
 		o.command = "help"
-	case "--version", "models":
+	case "--version", "models", "auth login", "auth status", "auth logout":
+	case "auth wait":
+		f.DurationVar(&o.timeout, "timeout", 0, "")
 	case "video create":
 		f.StringVar(&o.spec, "spec", "", "")
 		f.StringVar(&o.run, "run", "", "")
+		f.StringVar(&o.project, "project", "", "")
 	case "video status", "video wait", "video download", "canvas import":
 		f.StringVar(&o.run, "run", "", "")
 		f.StringVar(&o.task, "task", "", "")
@@ -82,9 +104,18 @@ func parseArgs(args []string) (options, *failure) {
 		return o, fail("invalid_run", "Use a run name of up to 128 letters, numbers, spaces, dots, dashes or underscores.")
 	}
 	switch o.command {
+	case "auth wait":
+		if o.timeout < 0 {
+			return o, fail("usage", "Use a nonnegative timeout.")
+		}
 	case "video create":
 		if o.run == "" || o.spec == "" {
 			return o, fail("usage", "Video create requires --spec FILE and --run NAME.")
+		}
+		var projectRequested bool
+		f.Visit(func(v *flag.Flag) { projectRequested = projectRequested || v.Name == "project" })
+		if projectRequested && !validUUID(o.project) {
+			return o, fail("invalid_project", "Supply a project UUID with --project.")
 		}
 	case "video status", "video wait", "video download", "canvas import":
 		if (o.run == "") == (o.task == "") {
@@ -121,6 +152,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 	}
 	o, problem := parseArgs(rest)
 	key := os.Getenv("IFYTV_API_KEY")
+	secrets := []string{key}
 	var result output
 	if problem == nil {
 		result.Run, result.TaskID, result.ProjectID = o.run, o.task, o.project
@@ -134,12 +166,13 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 			c, problem = newClient(os.Getenv("IFYTV_BASE_URL"), key, o.command != "models")
 			if problem == nil {
 				c.progress = stderr
-				result, problem = c.execute(ctx, o)
+				result, problem = c.runCommand(ctx, o, result)
+				secrets = append(secrets, c.secrets...)
 			}
 		}
 	}
 	result.Error = problem
-	if err := render(stdout, stderr, result, jsonMode, key); err != nil {
+	if err := render(stdout, stderr, result, jsonMode, secrets...); err != nil {
 		return 1
 	}
 	if problem != nil {
@@ -164,17 +197,15 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 		return c.create(ctx, o)
 	}
 	result.Run, result.TaskID, result.ProjectID = o.run, o.task, o.project
-	if o.command == "video wait" && o.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, o.timeout)
-		defer cancel()
-	}
 	if o.run != "" {
-		task, problem := c.taskForRun(ctx, o.run)
+		r, problem := c.submittedRun(ctx, o.run)
 		if problem != nil {
 			return result, problem
 		}
-		result.TaskID = task
+		result.TaskID = r.Task.ID
+		if o.command != "canvas import" {
+			c.addCanvasLocation(&result, r.ProjectID, r.Task.NodeID)
+		}
 	}
 	switch o.command {
 	case "canvas import":
@@ -185,6 +216,20 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 	lastProgress := ""
 	for {
 		info, problem := c.status(ctx, result.TaskID)
+		modelFinished := problem == nil && info.Status == "succeeded"
+		historyExpired := problem != nil && problem.HTTPStatus == http.StatusNotFound && problem.Code == "task_not_found"
+		if o.command == "video wait" && result.NodeID != "" && (modelFinished || historyExpired) {
+			// Persisted card receipts can outlive task history. Import checks
+			// the target and its receipt before looking up a task or media.
+			if modelFinished {
+				result.Task = info
+			}
+			result, problem = c.importVideo(ctx, result)
+			if problem == nil {
+				result.Status = "succeeded"
+				return result, nil
+			}
+		}
 		if problem == nil {
 			result.Task = info
 			if info.Status == "failed" {

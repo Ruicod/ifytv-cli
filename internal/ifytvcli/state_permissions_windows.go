@@ -47,6 +47,14 @@ func stateAttributes(sid, inheritance string) (*syscall.SecurityAttributes, erro
 }
 
 func ensureStateDir(dir string) error {
+	return ensureWindowsDir(dir, false)
+}
+
+// The configured state root may be readable by others. Its protected auth
+// child and the credential files themselves are restricted to trusted SIDs.
+func ensureDeviceRoot(dir string) error { return ensureWindowsDir(dir, true) }
+
+func ensureWindowsDir(dir string, allowOtherReaders bool) error {
 	// The user's root and its runs directory may be intentionally shared.
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
@@ -70,7 +78,7 @@ func ensureStateDir(dir string) error {
 		return err
 	}
 	const readControlAndAttributes = 0x00020000 | 0x80
-	f, err := openStateObject(dir, sid, readControlAndAttributes, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, nil, created)
+	f, err := openStateObject(dir, sid, readControlAndAttributes, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, nil, created, allowOtherReaders)
 	if err != nil {
 		return err
 	}
@@ -81,12 +89,18 @@ func openStateLock(path string) (*os.File, error) {
 	return createStateFile(path, syscall.OPEN_ALWAYS)
 }
 
+// The Windows state helpers already check the owner, DACL and reparse points
+// on the actual handle, including when opening an existing file.
+func ensureDeviceDir(dir string) error               { return ensureStateDir(dir) }
+func openDeviceLock(path string) (*os.File, error)   { return openStateLock(path) }
+func openDeviceRecord(path string) (*os.File, error) { return openStateRecord(path) }
+
 func openStateRecord(path string) (*os.File, error) {
 	sid, err := stateUserSID()
 	if err != nil {
 		return nil, err
 	}
-	return openStateObject(path, sid, syscall.GENERIC_READ, syscall.OPEN_EXISTING, 0, nil, false)
+	return openStateObject(path, sid, syscall.GENERIC_READ, syscall.OPEN_EXISTING, 0, nil, false, false)
 }
 
 func createStateTemp(dir string) (*os.File, error) {
@@ -112,12 +126,12 @@ func createStateFile(path string, disposition uint32) (*os.File, error) {
 		return nil, err
 	}
 	defer syscall.LocalFree(syscall.Handle(sa.SecurityDescriptor))
-	return openStateObject(path, sid, syscall.GENERIC_READ|syscall.GENERIC_WRITE, disposition, 0, sa, disposition == syscall.CREATE_NEW)
+	return openStateObject(path, sid, syscall.GENERIC_READ|syscall.GENERIC_WRITE, disposition, 0, sa, disposition == syscall.CREATE_NEW, false)
 }
 
 // Check the kernel object's security on the same handle used for subsequent
 // reads and writes. Legacy private, inherited ACLs can still be opened.
-func openStateObject(path, sid string, access, disposition, flags uint32, sa *syscall.SecurityAttributes, requireProtected bool) (*os.File, error) {
+func openStateObject(path, sid string, access, disposition, flags uint32, sa *syscall.SecurityAttributes, requireProtected, allowOtherReaders bool) (*os.File, error) {
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
@@ -129,7 +143,7 @@ func openStateObject(path, sid string, access, disposition, flags uint32, sa *sy
 		return nil, err
 	}
 	wantDir := flags&syscall.FILE_FLAG_BACKUP_SEMANTICS != 0
-	if !privateStateObject(h, sid, wantDir, requireProtected) {
+	if !privateStateObject(h, sid, wantDir, requireProtected, allowOtherReaders) {
 		syscall.CloseHandle(h)
 		if disposition == syscall.CREATE_NEW {
 			os.Remove(path) // Our empty, uniquely created temporary file.
@@ -158,7 +172,7 @@ type stateACE struct {
 	sidStart    uint32
 }
 
-func privateStateObject(h syscall.Handle, user string, directory, requireProtected bool) bool {
+func privateStateObject(h syscall.Handle, user string, directory, requireProtected, allowOtherReaders bool) bool {
 	var info syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(h, &info); err != nil ||
 		info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
@@ -205,6 +219,12 @@ func privateStateObject(h syscall.Handle, user string, directory, requireProtect
 			return false // An unfamiliar grant cannot establish privacy.
 		}
 		sid, err := (*syscall.SID)(unsafe.Pointer(&ace.sidStart)).String()
+		// FILE_GENERIC_READ | FILE_GENERIC_EXECUTE and their generic forms.
+		// These rights permit traversal without creating or replacing a child.
+		const readOrTraverse = 0x001200a9 | syscall.GENERIC_READ | syscall.GENERIC_EXECUTE
+		if err == nil && allowOtherReaders && ace.mask&^readOrTraverse == 0 {
+			continue
+		}
 		if err != nil || !(trusted(sid) || (directory && ace.flags&inheritOnly != 0 && sid == creatorOwner)) {
 			return false
 		}

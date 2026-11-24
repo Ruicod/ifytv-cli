@@ -19,13 +19,14 @@ type savedRef struct {
 }
 
 type record struct {
-	Version  int             `json:"version"`
-	Stage    string          `json:"stage"`
-	SpecHash string          `json:"spec_sha256"`
-	Key      string          `json:"idempotency_key"`
-	Refs     []savedRef      `json:"references"`
-	Payload  json.RawMessage `json:"payload,omitempty"`
-	Task     *taskReply      `json:"task,omitempty"`
+	Version   int             `json:"version"`
+	ProjectID string          `json:"project_id,omitempty"`
+	Stage     string          `json:"stage"`
+	SpecHash  string          `json:"spec_sha256"`
+	Key       string          `json:"idempotency_key"`
+	Refs      []savedRef      `json:"references"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	Task      *taskReply      `json:"task,omitempty"`
 }
 
 func newKey() (string, error) {
@@ -66,36 +67,59 @@ func stateRoot() (string, error) {
 	}
 }
 
-type runFile struct {
+type stateFile struct {
 	path string
 	lock *os.File
+}
+
+func (f *stateFile) unlock() {
+	// The lock handle contains no buffered application data.
+	_ = f.lock.Close()
 }
 
 var errUnsafeStateACL = errors.New("cannot establish private run state permissions")
 
 func stateAccessFailure(err error, code, message string) *failure {
 	if errors.Is(err, errUnsafeStateACL) {
-		return fail("unsafe_state_permissions", "Cannot verify private Windows run state. Restrict the existing run to your Windows account and administrators, or set IFYTV_STATE_DIR to a private folder on an ACL-capable drive.")
+		return fail("unsafe_state_permissions", "Cannot verify private local state. Restrict the state directory and files to your account, or set IFYTV_STATE_DIR to a private directory.")
 	}
 	return fail(code, message)
 }
 
-func (c *client) lockRun(ctx context.Context, name string) (*runFile, *failure) {
+func (c *client) lockRun(ctx context.Context, name string) (*stateFile, *failure) {
+	if !validHash(c.runScope) {
+		return nil, fail("invalid_run_scope", "Cannot identify the account for this run. Sign in again.")
+	}
+	return lockState(ctx, "runs", c.runScope, digest([]byte(name)))
+}
+
+func lockState(ctx context.Context, category, scope, name string) (*stateFile, *failure) {
 	root, err := stateRoot()
 	if err != nil {
 		return nil, fail("state_unavailable", "Cannot locate the private state directory. Set IFYTV_STATE_DIR.")
 	}
-	scope := digest([]byte(c.base.String() + "\x00" + c.key))
-	dir := filepath.Join(root, "runs", scope)
-	if err := ensureStateDir(dir); err != nil {
+	dir := filepath.Join(root, category, scope)
+	prepareDir, openLock := ensureStateDir, openStateLock
+	if category == "auth" {
+		// A writable parent can replace a private child with another directory
+		// or a symlink. Check the state root and protect the auth parent first.
+		if err := ensureDeviceRoot(root); err != nil {
+			return nil, stateAccessFailure(err, "state_unavailable", "Cannot access the state root for device sign-in.")
+		}
+		if err := ensureDeviceDir(filepath.Join(root, category)); err != nil {
+			return nil, stateAccessFailure(err, "state_unavailable", "Cannot access the private device sign-in directory.")
+		}
+		prepareDir, openLock = ensureDeviceDir, openDeviceLock
+	}
+	if err := prepareDir(dir); err != nil {
 		return nil, stateAccessFailure(err, "state_unavailable", "Cannot create the private state directory.")
 	}
-	stem := filepath.Join(dir, digest([]byte(name)))
+	stem := filepath.Join(dir, name)
 	// Never unlink this lock file: replacing its inode could admit a second
 	// writer. The kernel releases its lock when the process or handle exits.
-	file, err := openStateLock(stem + ".lock")
+	file, err := openLock(stem + ".lock")
 	if err != nil {
-		return nil, stateAccessFailure(err, "state_unavailable", "Cannot open the run lock. Check the state directory permissions.")
+		return nil, stateAccessFailure(err, "state_unavailable", "Cannot open the local state lock. Check the state directory permissions.")
 	}
 	for {
 		if ctx.Err() != nil {
@@ -105,10 +129,10 @@ func (c *client) lockRun(ctx context.Context, name string) (*runFile, *failure) 
 		acquired, err := tryFileLock(file)
 		if err != nil {
 			file.Close()
-			return nil, fail("state_lock_failed", "Cannot lock this run in the state directory.")
+			return nil, fail("state_lock_failed", "Cannot lock the local state file.")
 		}
 		if acquired {
-			return &runFile{stem + ".json", file}, nil
+			return &stateFile{stem + ".json", file}, nil
 		}
 		if problem := pause(ctx, 50*time.Millisecond); problem != nil {
 			file.Close()
@@ -130,7 +154,10 @@ func validHash(s string) bool {
 }
 
 func (r *record) valid() bool {
-	if r.Version != 1 || !validUUID(r.Key) || !validHash(r.SpecHash) {
+	if !validUUID(r.Key) || !validHash(r.SpecHash) {
+		return false
+	}
+	if (r.ProjectID == "" && r.Version != 1) || (r.ProjectID != "" && (r.Version != 2 || !validUUID(r.ProjectID))) {
 		return false
 	}
 	for _, ref := range r.Refs {
@@ -142,19 +169,27 @@ func (r *record) valid() bool {
 	case "uploading":
 		return len(r.Payload) == 0 && r.Task == nil
 	case "prepared", "submitted":
+		payload := r.Payload
+		if r.ProjectID != "" {
+			var body canvasRunRequest
+			if json.Unmarshal(payload, &body) != nil || len(body.Names) != len(r.Refs) {
+				return false
+			}
+			payload = body.Spec
+		}
 		var spec videoSpec
-		if len(r.Payload) == 0 || json.Unmarshal(r.Payload, &spec) != nil || spec.Model == "" {
+		if json.Unmarshal(payload, &spec) != nil || spec.Model == "" {
 			return false
 		}
 		if r.Stage == "prepared" {
 			return r.Task == nil
 		}
-		return r.Task != nil && r.Task.validate("") == nil
+		return r.Task != nil && r.Task.validate("") == nil && r.Task.validateProject(r.ProjectID) == nil
 	}
 	return false
 }
 
-func (f *runFile) load() (*record, *failure) {
+func (f *stateFile) load() (*record, *failure) {
 	file, err := openStateRecord(f.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -172,14 +207,17 @@ func (f *runFile) load() (*record, *failure) {
 	return &r, nil
 }
 
-func (f *runFile) save(r *record) *failure {
-	const message = "Could not save the run. Check the state directory and retry the same run."
+func (f *stateFile) save(r *record) *failure {
+	return f.writeJSON(r, "Could not save the run. Check the state directory and retry the same run.")
+}
+
+func (f *stateFile) writeJSON(value any, message string) *failure {
 	temp, err := createStateTemp(filepath.Dir(f.path))
 	if err != nil {
 		return stateAccessFailure(err, "state_write_failed", message)
 	}
 	defer os.Remove(temp.Name())
-	err = json.NewEncoder(temp).Encode(r)
+	err = json.NewEncoder(temp).Encode(value)
 	if err == nil {
 		err = temp.Sync()
 	}
@@ -193,21 +231,21 @@ func (f *runFile) save(r *record) *failure {
 	return nil
 }
 
-func (c *client) taskForRun(ctx context.Context, name string) (string, *failure) {
+func (c *client) submittedRun(ctx context.Context, name string) (*record, *failure) {
 	file, problem := c.lockRun(ctx, name)
 	if problem != nil {
-		return "", problem
+		return nil, problem
 	}
-	defer file.lock.Close()
+	defer file.unlock()
 	r, problem := file.load()
 	if problem != nil {
-		return "", problem
+		return nil, problem
 	}
 	if r == nil {
-		return "", fail("run_not_found", "No run with this name exists for the current site and key.")
+		return nil, fail("run_not_found", "No run with this name exists for the current site and key.")
 	}
 	if r.Task == nil {
-		return "", fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
+		return nil, fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
 	}
-	return r.Task.ID, nil
+	return r, nil
 }

@@ -23,6 +23,8 @@ const maxJSONBytes = 4 << 20
 type client struct {
 	base     *url.URL
 	key      string
+	runScope string
+	secrets  []string
 	http     *http.Client
 	progress io.Writer
 }
@@ -58,16 +60,17 @@ func newClient(site, key string, auth bool) (*client, *failure) {
 		if u.Scheme == "http" && u.Hostname() != "localhost" && !net.ParseIP(u.Hostname()).IsLoopback() {
 			return nil, fail("insecure_base_url", "Authenticated commands require HTTPS outside localhost and loopback IP addresses.")
 		}
-		if key == "" {
-			return nil, fail("missing_api_key", "Set IFYTV_API_KEY for this command.")
-		}
 		if len(key) > 4096 || strings.IndexFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 			return nil, fail("invalid_api_key", "Check IFYTV_API_KEY for whitespace or invalid characters.")
 		}
 	} else {
 		key = ""
 	}
-	return &client{base: u, key: key, http: &http.Client{Timeout: 30 * time.Minute, CheckRedirect: checkRedirect}}, nil
+	c := &client{base: u, key: key, http: &http.Client{Timeout: 30 * time.Minute, CheckRedirect: checkRedirect}}
+	if key != "" && !strings.HasPrefix(key, deviceTokenPrefix) {
+		c.runScope = digest([]byte(u.String() + "\x00" + key))
+	}
+	return c, nil
 }
 
 func webURL(u *url.URL) bool {
@@ -114,6 +117,9 @@ func (c *client) request(ctx context.Context, method, path string, body io.Reade
 		return nil, fail("invalid_request", "Could not build the request. Check IFYTV_BASE_URL.")
 	}
 	if auth {
+		if c.key == "" {
+			return nil, fail("authorization_required", "Sign in with ifytv auth login.")
+		}
 		req.Header.Set("Authorization", "Bearer "+c.key)
 	}
 	return req, nil
@@ -142,7 +148,12 @@ func (c *client) send(req *http.Request) (*http.Response, *failure) {
 		if code == "" {
 			code = "http_error"
 		}
-		return nil, &failure{Code: code, Message: httpMessage(resp.StatusCode), HTTPStatus: resp.StatusCode, retryAfter: retryDelay(resp.Header.Get("Retry-After"))}
+		problem := &failure{Code: code, Message: httpMessage(resp.StatusCode), HTTPStatus: resp.StatusCode, retryAfter: retryDelay(resp.Header.Get("Retry-After"))}
+		// A download may finish on a CDN. Only the credentialed site itself
+		// can declare this machine's saved device session invalid.
+		problem.invalidDevice = resp.StatusCode == 401 && code == "device_unauthorized" && c.key != "" &&
+			origin(resp.Request.URL) == origin(c.base) && resp.Request.Header.Get("Authorization") == "Bearer "+c.key
+		return nil, problem
 	}
 	return resp, nil
 }
@@ -237,8 +248,38 @@ func (c *client) models(ctx context.Context) ([]capability, *failure) {
 }
 
 type taskReply struct {
-	ID string `json:"id"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
 	Task
+}
+
+func (t *taskReply) validateProject(project string) *failure {
+	if project == "" {
+		t.ProjectID, t.NodeID = "", ""
+		return nil
+	}
+	if t.ProjectID != project || !nodePattern.MatchString(t.NodeID) {
+		return fail("invalid_response", "The site did not identify the video card in the requested project. Retry the same run.")
+	}
+	return nil
+}
+
+func (c *client) addCanvasLocation(result *output, project, node string) {
+	if project != "" {
+		result.ProjectID, result.NodeID = project, node
+		result.ProjectURL = c.base.String() + "/canvas/cloud/" + project
+		if node != "" {
+			result.ProjectURL += "?node=" + url.QueryEscape(node)
+		}
+	}
+}
+
+func (c *client) addProjectConsent(result *output, problem *failure) {
+	if problem.HTTPStatus == http.StatusForbidden &&
+		(problem.Code == "canvas_forbidden" || problem.Code == "cli_grant_required" || problem.Code == "forbidden") {
+		result.AuthorizationURL = c.base.String() + "/cli?project=" + result.ProjectID
+	}
 }
 
 func (t *taskReply) validate(expected string) *failure {
@@ -283,19 +324,22 @@ func (c *client) importVideo(ctx context.Context, result output) (output, *failu
 	}
 	problem := c.json(ctx, "POST", "/api/v1/cli/projects/"+result.ProjectID+"/videos", payload, "", true, &reply)
 	if problem != nil {
-		if problem.HTTPStatus == http.StatusForbidden {
-			result.AuthorizationURL = c.base.String() + "/cli?project=" + result.ProjectID
+		c.addProjectConsent(&result, problem)
+		if problem.Code == "canvas_asset_daily_limit" {
+			problem.Message = "The project's daily upload allowance is used up. When it resets, save this task to the same canvas card."
 		}
 		return result, problem
 	}
-	if !strings.EqualFold(reply.Project, result.ProjectID) || !nodePattern.MatchString(reply.Node) || !validUUID(reply.Asset) || reply.Duplicate == nil {
+	if !strings.EqualFold(reply.Project, result.ProjectID) || !nodePattern.MatchString(reply.Node) || !validUUID(reply.Asset) || reply.Duplicate == nil ||
+		(result.NodeID != "" && result.NodeID != reply.Node) {
 		return result, fail("invalid_response", "The site returned an incomplete import receipt. Retry the import for this task.")
 	}
+	requestedNode := result.NodeID
 	result.NodeID, result.AssetID, result.Duplicate = reply.Node, reply.Asset, reply.Duplicate
 	// The public cloud-project route is stable. Only surface a node query when
 	// it identifies this receipt's node; never emit a server-supplied bearer URL.
 	result.ProjectURL = c.base.String() + "/canvas/cloud/" + result.ProjectID
-	if u, err := url.Parse(reply.Link); err == nil && u.Query().Get("node") == reply.Node {
+	if u, err := url.Parse(reply.Link); requestedNode == reply.Node || (err == nil && u.Query().Get("node") == reply.Node) {
 		result.ProjectURL += "?node=" + url.QueryEscape(reply.Node)
 	}
 	return result, nil

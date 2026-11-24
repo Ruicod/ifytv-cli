@@ -37,6 +37,7 @@ if ($env:IFYTV_ACL_ACTION -ne 'inspect') {
     $flags = if ((Get-Item -LiteralPath $path).PSIsContainer) { 'OICI' } else { '' }
     $sddl = "D:P(A;$flags;FA;;;$me)(A;$flags;FA;;;SY)(A;$flags;FA;;;BA)"
     if ($env:IFYTV_ACL_ACTION -eq 'shared') { $sddl += "(A;$flags;FR;;;WD)" }
+    if ($env:IFYTV_ACL_ACTION -eq 'writable') { $sddl += "(A;$flags;FA;;;WD)" }
     if ([IO.Directory]::Exists($path)) {
         $dacl = [Security.AccessControl.DirectorySecurity]::new()
         $dacl.SetSecurityDescriptorSddlForm($sddl, $section)
@@ -104,6 +105,34 @@ func TestWindowsStateTempPrivateBeforeWrite(t *testing.T) {
 	}
 	if fixtureACL(t, dir, "inspect") != before {
 		t.Fatal("creating a private temporary file changed its parent ACL")
+	}
+}
+
+func TestWindowsDeviceRefusesWritableStateParents(t *testing.T) {
+	for _, scenario := range []string{"writable root", "writable auth", "readable root"} {
+		t.Run(scenario, func(t *testing.T) {
+			testSite(t, func(w http.ResponseWriter, r *http.Request) { jsonReply(w, 200, challengeJSON) })
+			t.Setenv("IFYTV_API_KEY", "")
+			root := os.Getenv("IFYTV_STATE_DIR")
+			switch scenario {
+			case "writable root":
+				fixtureACL(t, root, "writable")
+			case "writable auth":
+				dir := filepath.Join(root, "auth")
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				fixtureACL(t, dir, "writable")
+			case "readable root":
+				fixtureACL(t, root, "shared")
+				authResult(t, authCommand("login"), true, "authorization_required")
+				if a := fixtureACL(t, filepath.Join(root, "auth"), "inspect"); a.OtherAllow || !a.Protected {
+					t.Fatal("credential parent inherited a shared ACL")
+				}
+				return
+			}
+			expectError(t, authCommand("login").result(t, false), "unsafe_state_permissions")
+		})
 	}
 }
 
