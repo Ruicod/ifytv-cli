@@ -2,7 +2,9 @@
 
 让 Codex 或 Claude Code 在 IFYTV 云画布上放好图片、配音和提示词，生成视频。打开画布就能看到素材连到了哪张视频卡、当前进度，以及原卡上的成片。也支持下载 MP4 和导入已有任务。
 
-从目标 IFYTV 站点的 `/cli` 页面安装配套的 CLI 和 Skill。`dev` 分支提供画布内生成和浏览器设备授权。安装页显示「尚未发布」时，可按下方的源码方式体验 dev 版。
+公开预发布版 `0.2.0-rc.4` 提供 Windows x64、macOS Intel、macOS Apple Silicon 和 Linux x64 的预编译 CLI，以及 Codex 和 Claude Code 共用的 Skill。下载对应平台的 CLI ZIP、Skill ZIP 和 `manifest.json` 即可安装，无需编译源码。[下载 CLI 和 Skill](https://github.com/Ruicod/ifytv-cli/releases/tag/v0.2.0-rc.4)
+
+也可以把上面的 Release 链接发给 Agent，让它为当前电脑下载并核对两个 ZIP、安装 CLI 和 Skill，再用 `ifytv --version` 确认版本。连接 dev 画布时，将 Agent 环境中的 `IFYTV_BASE_URL` 设为该画布所在站点的 HTTPS 根地址。
 
 ## 在 Codex 或 Claude Code 里使用
 
@@ -16,7 +18,7 @@
 
 设备授权本身免费，提交视频生成按所选模型计费。想断开这台设备时，对 Agent 说「退出这台设备的 IFYTV 授权」即可。
 
-## 从源码运行
+## 从源码开发
 
 体验 dev 版时，也可以请 Agent 用 Go 1.22 或更高版本，从同一次检出安装 CLI 和 Skill。
 
@@ -69,31 +71,24 @@ ifytv canvas import --project 22222222-2222-4222-8222-222222222222 --run shot-07
 ifytv canvas import --project 22222222-2222-4222-8222-222222222222 --task 11111111-1111-4111-8111-111111111111 --json
 ```
 
-## 取得同一版本的 CLI 和 Skill
+## 下载并安装 CLI 和 Skill
 
-以下示例将画布生成候选包单独放在本地候选目录。在仓库根目录执行打包。它会用 `-ldflags "-X main.version=0.2.0-rc.4"` 将版本写入 CLI，再对四个目标交叉编译。相同源码和 Go 工具链生成稳定的归档。已有版本目录受保护，重复验证同一版本可给 `-out` 指定一个新的空目录。
-
-```sh
-go test ./tools/ifytv-release -count=1
-go run ./tools/ifytv-release -version 0.2.0-rc.4 -out ./dist/canvas-candidates
-```
-
-`dist/canvas-candidates/latest.json` 记录版本号。`dist/canvas-candidates/0.2.0-rc.4/manifest.json` 按下表顺序列出附件的文件名、平台、架构、版本固定的 URL、字节数和 SHA-256。打包命令只写本地文件。正式发布后，可从本仓库对应标签的 Release 获取同名附件。[仓库 Releases](https://github.com/Ruicod/ifytv-cli/releases)
+从下表选择一个平台 ZIP，另下载通用 Skill ZIP。把两个 ZIP 和校验清单放到同一个下载目录。清单记录每个附件的字节数及 SHA-256。[下载 manifest.json](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/manifest.json)
 
 | 系统 | 0.2.0-rc.4 附件 | 解压内容 |
 | --- | --- | --- |
-| Windows x64 | `ifytv-0.2.0-rc.4-windows-amd64.zip` | `ifytv.exe` |
-| macOS Intel | `ifytv-0.2.0-rc.4-darwin-amd64.zip` | `ifytv` |
-| macOS Apple Silicon | `ifytv-0.2.0-rc.4-darwin-arm64.zip` | `ifytv` |
-| Linux x64 | `ifytv-0.2.0-rc.4-linux-amd64.zip` | `ifytv` |
-| Codex / Claude Code | `ifytv-skill-0.2.0-rc.4.zip` | `ifytv/SKILL.md`、`ifytv/examples/h3.json` |
+| Windows x64 | [Windows CLI ZIP](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/ifytv-0.2.0-rc.4-windows-amd64.zip) | `ifytv.exe` |
+| macOS Intel | [macOS Intel CLI ZIP](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/ifytv-0.2.0-rc.4-darwin-amd64.zip) | `ifytv` |
+| macOS Apple Silicon | [macOS arm64 CLI ZIP](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/ifytv-0.2.0-rc.4-darwin-arm64.zip) | `ifytv` |
+| Linux x64 | [Linux CLI ZIP](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/ifytv-0.2.0-rc.4-linux-amd64.zip) | `ifytv` |
+| Codex / Claude Code | [通用 Agent Skill ZIP](https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.4/ifytv-skill-0.2.0-rc.4.zip) | `ifytv/SKILL.md`、`ifytv/examples/h3.json` |
 
 ### Windows 安装
 
-以下为首次安装示例。选择 Codex 时保持 `.agents/skills`，选择 Claude Code 时把它换成 `.claude/skills`。脚本用版本清单校验两个 ZIP 后再解压。
+在保存这三个文件的目录中打开 PowerShell。首次安装时，Codex 使用 `.agents/skills`，Claude Code 使用 `.claude/skills`。脚本会先校验两个 ZIP，再解压。
 
 ```powershell
-$releaseDir = './dist/canvas-candidates/0.2.0-rc.4'
+$releaseDir = (Get-Location).Path
 $cliZip = 'ifytv-0.2.0-rc.4-windows-amd64.zip'
 $skillZip = 'ifytv-skill-0.2.0-rc.4.zip'
 $manifest = Get-Content -Raw (Join-Path $releaseDir 'manifest.json') | ConvertFrom-Json
@@ -117,10 +112,9 @@ ifytv --version
 
 ### macOS / Linux 安装
 
-进入版本目录，按上表设置 `cli`。示例选择 Apple Silicon。将输出的两个字节数和两个摘要分别与 `manifest.json` 中同名附件的 `bytes`、`sha256` 核对。
+在保存这三个文件的目录中打开终端，按所选平台设置 `cli`。示例选择 Apple Silicon。将输出的两个字节数和两个摘要分别与 `manifest.json` 中同名附件的 `bytes`、`sha256` 核对。
 
 ```sh
-cd ./dist/canvas-candidates/0.2.0-rc.4
 cli=ifytv-0.2.0-rc.4-darwin-arm64.zip
 skill=ifytv-skill-0.2.0-rc.4.zip
 wc -c "$cli" "$skill"
@@ -143,4 +137,13 @@ export PATH="$HOME/.local/bin:$PATH"
 ifytv --version
 ```
 
-两个 Agent 可各解压一次同一个 Skill ZIP。确保下次启动时 PATH 仍包含 CLI 目录，再打开新会话。可以说「按这五张图和三段 MP3 做一条 H3，先列出每个角色的配音」或「把这个任务 ID 的成片导入我给的云画布」。[Skill 使用说明](skills/ifytv/SKILL.md)
+`ifytv --version` 应显示 `0.2.0-rc.4`。两种 Agent 可以各解压一次同一个 Skill ZIP。将 CLI 目录加入长期生效的 `PATH`（Windows 用户 `Path` 或 macOS/Linux 的 shell 启动配置），重启 Agent 后即可使用。[Skill 使用说明](skills/ifytv/SKILL.md)
+
+## 维护者打包
+
+在仓库根目录运行以下命令，为四个平台构建指定版本的 CLI，并生成配套 Skill、`manifest.json` 和本地 `latest.json`。同一份源码与 Go 工具链可重建相同归档。已有版本目录受保护，可以将 `-out` 指向另一个空目录进行复核。
+
+```sh
+go test ./tools/ifytv-release -count=1
+go run ./tools/ifytv-release -version 0.2.0-rc.4 -out ./dist/canvas-candidates
+```
