@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Ruicod/ifytv-cli/internal/install"
 )
 
 type failure struct {
@@ -44,23 +48,24 @@ type Task struct {
 
 type output struct {
 	Task
-	TaskID           string        `json:"task_id,omitempty"`
-	Run              string        `json:"run,omitempty"`
-	ProjectID        string        `json:"project_id,omitempty"`
-	NodeID           string        `json:"node_id,omitempty"`
-	AssetID          string        `json:"asset_id,omitempty"`
-	ProjectURL       string        `json:"project_url,omitempty"`
-	Duplicate        *bool         `json:"duplicate,omitempty"`
-	AuthorizationURL string        `json:"authorization_url,omitempty"`
-	AuthorizationID  string        `json:"authorization_id,omitempty"`
-	UserCode         string        `json:"user_code,omitempty"`
-	Source           string        `json:"source,omitempty"`
-	Path             string        `json:"path,omitempty"`
-	Bytes            int64         `json:"bytes,omitempty"`
-	Models           *[]capability `json:"models,omitempty"`
-	Version          string        `json:"version,omitempty"`
-	Help             string        `json:"help,omitempty"`
-	Error            *failure      `json:"error,omitempty"`
+	TaskID           string          `json:"task_id,omitempty"`
+	Run              string          `json:"run,omitempty"`
+	ProjectID        string          `json:"project_id,omitempty"`
+	NodeID           string          `json:"node_id,omitempty"`
+	AssetID          string          `json:"asset_id,omitempty"`
+	ProjectURL       string          `json:"project_url,omitempty"`
+	Duplicate        *bool           `json:"duplicate,omitempty"`
+	AuthorizationURL string          `json:"authorization_url,omitempty"`
+	AuthorizationID  string          `json:"authorization_id,omitempty"`
+	UserCode         string          `json:"user_code,omitempty"`
+	Source           string          `json:"source,omitempty"`
+	Path             string          `json:"path,omitempty"`
+	Bytes            int64           `json:"bytes,omitempty"`
+	Models           *[]capability   `json:"models,omitempty"`
+	Version          string          `json:"version,omitempty"`
+	Help             string          `json:"help,omitempty"`
+	Installation     *install.Result `json:"installation,omitempty"`
+	Error            *failure        `json:"error,omitempty"`
 }
 
 func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...string) error {
@@ -100,6 +105,22 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 	}
 	if result.Version != "" {
 		lines = append(lines, result.Version)
+	}
+	if installed := result.Installation; installed != nil {
+		lines = append(lines, "Installed the IFYTV CLI at "+installed.Executable)
+		for _, dir := range installed.Skills {
+			lines = append(lines, "Installed the IFYTV Skill at "+dir)
+		}
+		for _, file := range installed.Backups {
+			lines = append(lines, "Saved the previous file at "+file)
+		}
+		if installed.Portable {
+			lines = append(lines, "To use ifytv by name, add "+filepath.Dir(installed.Executable)+" to your terminal's PATH.")
+		}
+		lines = append(lines, "Open a new terminal and run ifytv --version. Restart your Agent and start a new chat to use the Skill.")
+		if runtime.GOOS == "windows" && !installed.Portable {
+			lines = append(lines, "If a system-wide copy takes precedence, Get-Command ifytv -All shows the order. You can run the executable above directly.")
+		}
 	}
 	if result.Models != nil {
 		for _, m := range *result.Models {

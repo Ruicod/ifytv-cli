@@ -11,9 +11,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Ruicod/ifytv-cli/internal/install"
 )
 
-const help = `ifytv models [--json]
+const help = `ifytv install [--agent auto|codex|claude-code|cursor|gemini-cli|github-copilot|opencode|windsurf|kiro-cli|openclaw|both] [--json]
+ifytv models [--json]
 ifytv auth login [--json]
 ifytv auth wait [--authorization-id ID] [--timeout DURATION] [--json]
 ifytv auth status [--json]
@@ -25,6 +28,9 @@ ifytv video download (--run NAME | --task UUID) --out FILE [--json]
 ifytv canvas import --project UUID (--run NAME | --task UUID) [--json]
 ifytv --version
 
+Install copies this executable and its Agent Skill for the current user.
+The default installs the Skill for Codex, Claude Code and other detected Agents.
+IFYTV_INSTALL_HOME selects a portable installation without changing PATH.
 Sign in with ifytv auth login, open the printed link, then run ifytv auth wait.
 IFYTV_API_KEY overrides the saved login. IFYTV_BASE_URL selects the site.
 Use --authorization-id ID on video and canvas commands to require one specific device approval.
@@ -41,7 +47,7 @@ func validUUID(id string) bool {
 
 type options struct {
 	command, spec, run, task, project, out string
-	authorizationID                        string
+	authorizationID, agent                 string
 	interval, timeout                      time.Duration
 }
 
@@ -73,6 +79,8 @@ func parseArgs(args []string) (options, *failure) {
 	case "--help", "-h", "help", "video --help", "canvas --help", "auth --help", "video -h", "canvas -h", "auth -h":
 		o.command = "help"
 	case "--version", "models", "auth login", "auth status", "auth logout":
+	case "install":
+		f.StringVar(&o.agent, "agent", "auto", "")
 	case "auth wait":
 		f.DurationVar(&o.timeout, "timeout", 0, "")
 	case "video create":
@@ -151,8 +159,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 		}
 	}
 	o, problem := parseArgs(rest)
-	key := os.Getenv("IFYTV_API_KEY")
-	secrets := []string{key}
+	var secrets []string
 	var result output
 	if problem == nil {
 		result.Run, result.TaskID, result.ProjectID = o.run, o.task, o.project
@@ -161,7 +168,11 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 			result.Help = help
 		case "--version":
 			result.Version = version
+		case "install":
+			result.Installation, problem = installCommand(o.agent)
 		default:
+			key := os.Getenv("IFYTV_API_KEY")
+			secrets = append(secrets, key)
 			var c *client
 			c, problem = newClient(os.Getenv("IFYTV_BASE_URL"), key, o.command != "models")
 			if problem == nil {
@@ -182,6 +193,22 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 		return 1
 	}
 	return 0
+}
+
+func installCommand(agent string) (*install.Result, *failure) {
+	home, portable, err := install.UserHome()
+	if err != nil {
+		return nil, fail("install_failed", err.Error())
+	}
+	dirs, err := installSkillRoots(home, agent)
+	if err != nil {
+		return nil, fail("usage", err.Error())
+	}
+	installed, err := install.Run(home, dirs, portable)
+	if err != nil {
+		return nil, fail("install_failed", err.Error())
+	}
+	return &installed, nil
 }
 
 func (c *client) execute(ctx context.Context, o options) (output, *failure) {

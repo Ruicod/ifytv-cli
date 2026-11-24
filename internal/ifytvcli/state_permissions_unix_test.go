@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Ruicod/ifytv-cli/internal/fileops"
 )
 
 func TestUnixDeviceSecretsStayInPrivateRegularFiles(t *testing.T) {
@@ -104,7 +106,7 @@ func TestUnixPrivateRunPermissions(t *testing.T) {
 	if err := temp.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishFile(temp.Name(), final, true); err != nil {
+	if err := fileops.Publish(temp.Name(), final, true); err != nil {
 		t.Fatal(err)
 	}
 	r, err := openStateRecord(final)

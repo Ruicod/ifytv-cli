@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/Ruicod/ifytv-cli/internal/fileops"
 )
 
 const maxDownloadBytes = 2 << 30
@@ -69,7 +71,7 @@ func (c *client) download(ctx context.Context, result output, destination string
 	if !valid {
 		return result, fail("invalid_download", "The downloaded MP4 is incomplete or has no valid video samples. Retry the download.")
 	}
-	if err := publishFile(temp.Name(), path, false); err != nil {
+	if err := fileops.Publish(temp.Name(), path, false); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return result, outputExists()
 		}

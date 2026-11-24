@@ -1,4 +1,4 @@
-package ifytvcli
+package fileops
 
 import (
 	"os"
@@ -12,7 +12,7 @@ var (
 	moveFileEx = kernel32.NewProc("MoveFileExW")
 )
 
-func tryFileLock(file *os.File) (bool, error) {
+func TryLock(file *os.File) (bool, error) {
 	const exclusiveFailImmediately = 0x02 | 0x01
 	const lockViolation syscall.Errno = 33
 	var offset syscall.Overlapped
@@ -26,7 +26,7 @@ func tryFileLock(file *os.File) (bool, error) {
 	return false, err
 }
 
-func publishFile(temp, path string, replace bool) error {
+func Publish(temp, path string, replace bool) error {
 	from, err := syscall.UTF16PtrFromString(temp)
 	if err != nil {
 		return err

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/Ruicod/ifytv-cli/internal/fileops"
 )
 
 type savedRef struct {
@@ -126,7 +128,7 @@ func lockState(ctx context.Context, category, scope, name string) (*stateFile, *
 			file.Close()
 			return nil, contextFailure(ctx)
 		}
-		acquired, err := tryFileLock(file)
+		acquired, err := fileops.TryLock(file)
 		if err != nil {
 			file.Close()
 			return nil, fail("state_lock_failed", "Cannot lock the local state file.")
@@ -225,7 +227,7 @@ func (f *stateFile) writeJSON(value any, message string) *failure {
 	if err != nil || closeErr != nil {
 		return fail("state_write_failed", message)
 	}
-	if err := publishFile(temp.Name(), f.path, true); err != nil {
+	if err := fileops.Publish(temp.Name(), f.path, true); err != nil {
 		return fail("state_write_failed", message)
 	}
 	return nil

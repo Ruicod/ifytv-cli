@@ -9,7 +9,7 @@ description: 用 IFYTV 在用户的云画布上放置图片、配音和提示词
 
 ## 首次连接账号
 
-由 Agent 运行 `ifytv --version`。CLI 默认连接 IFYTV 官网，已有站点或脚本配置也可沿用。查看模型和准备镜头可直接继续。用 `ifytv models --json` 核对模型 ID、模式、时长、画幅与素材数量。
+由 Agent 运行 `ifytv --version`。如果刚装好且当前进程还查不到命令，或仍显示升级前的版本，直接调用当前用户目录的 `.local/bin/ifytv`（Windows 为 `.local/bin/ifytv.exe`）并核对版本。CLI 默认连接 IFYTV 官网，已有站点或脚本配置也可沿用。查看模型和准备镜头可直接继续。用 `ifytv models --json` 核对模型 ID、模式、时长、画幅与素材数量。
 
 用户要求生成、查询、下载或导入时，先执行相应命令。第一次返回 `authorization_required` 时，保留当前任务的规格、素材、运行名或任务 ID，按以下步骤继续。用户单独要求登录时，用 `ifytv auth login --json` 取得同样的链接。
 
@@ -19,7 +19,7 @@ description: 用 IFYTV 在用户的云画布上放置图片、配音和提示词
 
 已有设备授权会自动复用。账号密码、视频 Key 和本机凭据都无需发给 Agent，也无需用户打开终端。若旧 CLI 提示 `missing_api_key` 或无法识别 `auth` 命令，请通过站点安装页核对配套版本。若设备接口返回 404，说明当前站点尚未提供该入口，保留原请求以便更新后续办。
 
-若请求包含安装，从用户所选站点的 `/cli` 安装页取得同一版本的 CLI 和 Skill。本地验收可使用用户指定的候选包。按版本清单核对两个 ZIP 的字节数和 SHA-256，再把平台包的 `ifytv`（Windows 为 `ifytv.exe`）放入 PATH。把 Skill 包连同顶层 `ifytv/` 解压到 Codex 的 `~/.agents/skills/` 或 Claude Code 的 `~/.claude/skills/`，打开新会话。官网尚未提供可验证的附件时说明发布状态。
+用户要求安装时，按项目 README 为当前系统选择一条完整安装命令。安装器会核对平台包并安装匹配版本的 CLI 和 Skill。安装后重新打开 Agent。用户指定了离线正式包或本地候选包时，在核对来源、版本和 SHA-256 后，运行包内可执行文件的 `install` 子命令。[一行安装说明](https://github.com/Ruicod/ifytv-cli#一行安装)
 
 ## 在用户的画布上生成
 

@@ -13,7 +13,7 @@ var (
 	convertStateSDDL = stateAdvapi.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")
 	getStateSecurity = stateAdvapi.NewProc("GetSecurityInfo")
 	getStateACE      = stateAdvapi.NewProc("GetAce")
-	getStateVolume   = kernel32.NewProc("GetVolumeInformationByHandleW")
+	getStateVolume   = syscall.NewLazyDLL("kernel32.dll").NewProc("GetVolumeInformationByHandleW")
 )
 
 func stateUserSID() (string, error) {
