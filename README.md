@@ -131,7 +131,9 @@ CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE
 
 ## 从源码开发
 
-源码在 `dev` 分支，使用 Go 1.22 或更高版本。在仓库根目录运行 `go test ./...` 可执行测试。构建当前开发包时使用独立的预发布版本号和输出目录，例如下面的命令。[浏览开发分支](https://github.com/Ruicod/ifytv-cli/tree/dev)
+所有新增、修改和删除都直接在 `dev` 分支完成。项目所有者确认后，再将 `dev` 合并到 `main`。[浏览开发分支](https://github.com/Ruicod/ifytv-cli/tree/dev)
+
+开发环境使用 Go 1.22 或更高版本。在仓库根目录运行 `go test ./...` 可执行测试。构建当前开发包时使用独立的预发布版本号和输出目录，例如下面的命令。
 
 ```sh
 go run ./tools/ifytv-release -version 0.2.0-dev.canvas.2 -out ./dist/dev-candidates

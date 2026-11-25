@@ -1,7 +1,6 @@
 name: Verify public one-line installers v0.2.0-rc.5
 on:
-  push:
-    branches: [codex/verify-install-v0.2.0-rc.5]
+  workflow_dispatch:
 permissions: {}
 jobs:
   native:

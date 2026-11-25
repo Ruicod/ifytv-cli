@@ -1,8 +1,6 @@
 name: Verify public IFYTV 0.2.0-rc.4 macOS downloads
 on:
-  push:
-    branches:
-      - codex/verify-release-v0.2.0-rc.4
+  workflow_dispatch:
 
 permissions: {}
 
