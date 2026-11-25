@@ -1,0 +1,230 @@
+name: Verify public one-line installers v0.2.0-rc.5
+on:
+  push:
+    branches: [codex/verify-install-v0.2.0-rc.5]
+permissions: {}
+jobs:
+  native:
+    name: Native / ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runtime: win, os: windows, arch: amd64, runner: windows-2025}
+          - {runtime: win, os: windows, arch: arm64, runner: windows-11-arm}
+          - {runtime: unix, os: linux, arch: amd64, runner: ubuntu-24.04}
+          - {runtime: unix, os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {runtime: unix, os: darwin, arch: amd64, runner: macos-15-intel}
+          - {runtime: unix, os: darwin, arch: arm64, runner: macos-15}
+    env:
+      NATIVE_OS: ${{ matrix.os }}
+      NATIVE_ARCH: ${{ matrix.arch }}
+      WITH_OPTIONAL: '1'
+    steps:
+      - name: Select native login shell on POSIX runners
+        if: matrix.runtime == 'unix'
+        shell: bash
+        run: |
+          if test "$(uname -s)" = Darwin; then echo 'SHELL=/bin/zsh' >> "$GITHUB_ENV"; else echo 'SHELL=/bin/bash' >> "$GITHUB_ENV"; fi
+      - name: Prepare empty Agent directories on the disposable machine
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          import os
+          home = Path.home()
+          for relative in ('.cursor','.gemini','.copilot','.config/opencode','.codeium/windsurf','.kiro','.openclaw'):
+              (home / relative).mkdir(parents=True, exist_ok=True)
+          assert not (home / '.local' / 'bin' / ('ifytv.exe' if os.name == 'nt' else 'ifytv')).exists()
+      - name: Install with the README command (Windows PowerShell 5.1)
+        if: matrix.runtime == 'win'
+        shell: powershell
+        run: |
+          irm https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.ps1 | iex
+      - name: Reinstall through cmd.exe with the README command
+        if: matrix.runtime == 'win'
+        shell: cmd
+        run: |
+          powershell -NoProfile -Command "irm https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.ps1 | iex"
+      - name: Reinstall with PowerShell 7
+        if: matrix.runtime == 'win'
+        shell: pwsh
+        run: |
+          irm https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.ps1 | iex
+      - name: Install and repeat with curl (README command)
+        if: matrix.runtime == 'unix'
+        shell: bash
+        run: |
+          sh -c 'script=$(curl -fsSL https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.sh) && sh -c "$script"'
+          sh -c 'script=$(curl -fsSL https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.sh) && sh -c "$script"'
+      - name: Reinstall with wget (README command)
+        if: matrix.os == 'linux'
+        shell: sh
+        run: |
+          sh -c 'script=$(wget -qO- https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/install.sh) && sh -c "$script"'
+      - name: Check real CPU, installed binary, CLI version, nine Skills and durable PATH
+        shell: python {0}
+        run: |
+          import hashlib, io, json, os, pathlib, platform, subprocess, urllib.request, zipfile
+          V = '0.2.0-rc.5'
+          release = 'https://github.com/Ruicod/ifytv-cli/releases/download/v' + V + '/'
+          host = os.environ['NATIVE_OS']
+          arch = os.environ['NATIVE_ARCH']
+          machine = platform.machine().lower()
+          if os.name == 'nt':
+              import winreg
+              with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment') as key:
+                  machine = winreg.QueryValueEx(key,'PROCESSOR_ARCHITECTURE')[0].lower()
+          expected = {'amd64': ('x86_64', 'amd64'), 'arm64': ('aarch64', 'arm64')}
+          assert machine in expected[arch], (machine, arch)
+          home = pathlib.Path(os.environ.get('IFYTV_INSTALL_HOME') or pathlib.Path.home())
+          exe = 'ifytv.exe' if host == 'windows' else 'ifytv'
+          binary = home / '.local' / 'bin' / exe
+          assert subprocess.check_output([str(binary), '--version'], text=True).strip() == V
+          help_text = subprocess.check_output([str(binary), 'install', '--help'], text=True)
+          assert 'cursor' in help_text
+          sha = lambda data: hashlib.sha256(data).hexdigest()
+          def package(url):
+              with urllib.request.urlopen(release + url, timeout=60) as reply:
+                  return zipfile.ZipFile(io.BytesIO(reply.read()))
+          with package('ifytv-' + V + '-' + host + '-' + arch + '.zip') as z:
+              assert sha(z.read(exe)) == sha(binary.read_bytes())
+          agents = ['.agents','.claude']
+          if os.environ.get('WITH_OPTIONAL') == '1':
+              agents += ['.cursor', '.gemini', '.copilot', '.config/opencode', '.codeium/windsurf', '.kiro', '.openclaw']
+          with package('ifytv-skill-' + V + '.zip') as z:
+              for a in agents:
+                  for name in z.namelist():
+                      assert (home / a / 'skills' / name).read_bytes() == z.read(name), (a, name)
+          if not os.environ.get('IFYTV_INSTALL_HOME'):
+              if os.name == 'nt':
+                  import winreg
+                  with winreg.OpenKey(winreg.HKEY_CURRENT_USER,'Environment') as key:
+                      raw,_ = winreg.QueryValueEx(key,'Path')
+                  path = os.path.normcase(str(binary.parent))
+                  assert sum(os.path.normcase(os.path.expandvars(p.rstrip('\\'))) == path for p in raw.split(';')) == 1, raw
+              else:
+                  env = dict(os.environ)
+                  env['PATH'] = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+                  shell = '/bin/zsh' if host == 'darwin' else '/bin/bash'
+                  line = 'command -v ifytv && ifytv --version'
+                  found = subprocess.check_output([shell,'-lic',line],env=env,text=True)
+                  assert V in found and str(binary) in found, found
+          print('Verified public release', V, host, arch, 'CLI +', len(agents), 'Agent directories; native version, executable and Skill match release ZIPs.')
+  runners:
+    name: Package runner / ${{ matrix.manager }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        manager: [npm, pnpm, bun, yarn, skills]
+    env:
+      NATIVE_OS: linux
+      NATIVE_ARCH: amd64
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare selected manager
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/app" "$RUNNER_TEMP/tools"
+          echo "IFYTV_INSTALL_HOME=$RUNNER_TEMP/app" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/tools/node_modules/.bin" >> "$GITHUB_PATH"
+          case '${{ matrix.manager }}' in
+            pnpm) npm install --prefix "$RUNNER_TEMP/tools" pnpm@11.10.0 ;;
+            bun) npm install --prefix "$RUNNER_TEMP/tools" bun@1.4.5 ;;
+            yarn) npm install --prefix "$RUNNER_TEMP/tools" @yarnpkg/cli-dist@4.19.0 ;;
+          esac
+      - name: Install from the public GitHub package with the README command
+        if: matrix.manager != 'skills'
+        shell: bash
+        run: |
+          case '${{ matrix.manager }}' in
+            npm) npx -y https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/ifytv-install.tgz ;;
+            pnpm) pnpm dlx https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/ifytv-install.tgz ;;
+            bun) bunx --bun ifytv-install@https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/ifytv-install.tgz ;;
+            yarn) yarn dlx ifytv-install@https://github.com/Ruicod/ifytv-cli/releases/download/v0.2.0-rc.5/ifytv-install.tgz ;;
+          esac
+      - name: Verify installed executable and both default Agents
+        if: matrix.manager != 'skills'
+        shell: python {0}
+        run: |
+          import hashlib, io, json, os, pathlib, platform, subprocess, urllib.request, zipfile
+          V = '0.2.0-rc.5'
+          release = 'https://github.com/Ruicod/ifytv-cli/releases/download/v' + V + '/'
+          host = os.environ['NATIVE_OS']
+          arch = os.environ['NATIVE_ARCH']
+          machine = platform.machine().lower()
+          if os.name == 'nt':
+              import winreg
+              with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment') as key:
+                  machine = winreg.QueryValueEx(key,'PROCESSOR_ARCHITECTURE')[0].lower()
+          expected = {'amd64': ('x86_64', 'amd64'), 'arm64': ('aarch64', 'arm64')}
+          assert machine in expected[arch], (machine, arch)
+          home = pathlib.Path(os.environ.get('IFYTV_INSTALL_HOME') or pathlib.Path.home())
+          exe = 'ifytv.exe' if host == 'windows' else 'ifytv'
+          binary = home / '.local' / 'bin' / exe
+          assert subprocess.check_output([str(binary), '--version'], text=True).strip() == V
+          help_text = subprocess.check_output([str(binary), 'install', '--help'], text=True)
+          assert 'cursor' in help_text
+          sha = lambda data: hashlib.sha256(data).hexdigest()
+          def package(url):
+              with urllib.request.urlopen(release + url, timeout=60) as reply:
+                  return zipfile.ZipFile(io.BytesIO(reply.read()))
+          with package('ifytv-' + V + '-' + host + '-' + arch + '.zip') as z:
+              assert sha(z.read(exe)) == sha(binary.read_bytes())
+          agents = ['.agents','.claude']
+          if os.environ.get('WITH_OPTIONAL') == '1':
+              agents += ['.cursor', '.gemini', '.copilot', '.config/opencode', '.codeium/windsurf', '.kiro', '.openclaw']
+          with package('ifytv-skill-' + V + '.zip') as z:
+              for a in agents:
+                  for name in z.namelist():
+                      assert (home / a / 'skills' / name).read_bytes() == z.read(name), (a, name)
+          if not os.environ.get('IFYTV_INSTALL_HOME'):
+              if os.name == 'nt':
+                  import winreg
+                  with winreg.OpenKey(winreg.HKEY_CURRENT_USER,'Environment') as key:
+                      raw,_ = winreg.QueryValueEx(key,'Path')
+                  path = os.path.normcase(str(binary.parent))
+                  assert sum(os.path.normcase(os.path.expandvars(p.rstrip('\\'))) == path for p in raw.split(';')) == 1, raw
+              else:
+                  env = dict(os.environ)
+                  env['PATH'] = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+                  shell = '/bin/zsh' if host == 'darwin' else '/bin/bash'
+                  line = 'command -v ifytv && ifytv --version'
+                  found = subprocess.check_output([shell,'-lic',line],env=env,text=True)
+                  assert V in found and str(binary) in found, found
+          print('Verified public release', V, host, arch, 'CLI +', len(agents), 'Agent directories; native version, executable and Skill match release ZIPs.')
+      - name: Install only the tagged Skill in an explicitly selected third-party Agent
+        if: matrix.manager == 'skills'
+        shell: bash
+        env:
+          DISABLE_TELEMETRY: '1'
+        run: |
+          npx -y skills add Ruicod/ifytv-cli@v0.2.0-rc.5 -g --agent opencode -y
+          test -s "$HOME/.config/opencode/skills/ifytv/SKILL.md" || test -s "$HOME/.agents/skills/ifytv/SKILL.md"
+          curl -fsSL https://raw.githubusercontent.com/Ruicod/ifytv-cli/v0.2.0-rc.5/skills/ifytv/SKILL.md > "$RUNNER_TEMP/tagged.md"
+          found=$(find -L "$HOME/.agents" "$HOME/.config/opencode" -path '*/skills/ifytv/SKILL.md' -print -quit 2>/dev/null || true)
+          cmp "$found" "$RUNNER_TEMP/tagged.md"
+  compatibility:
+    name: Source build / Go 1.22
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.12'
+          cache: false
+      - name: Verify all commands, archives and the real embedded Skill using the minimum supported compiler
+        run: |
+          go version
+          go test ./... -count=1
