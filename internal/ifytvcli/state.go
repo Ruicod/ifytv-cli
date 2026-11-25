@@ -24,6 +24,7 @@ type record struct {
 	Version            int             `json:"version"`
 	ProjectID          string          `json:"project_id,omitempty"`
 	WorkspaceID        string          `json:"workspace_id,omitempty"`
+	WorkspaceKind      string          `json:"workspace_kind,omitempty"`
 	RequestedWorkspace string          `json:"requested_workspace_id,omitempty"`
 	ProjectKey         string          `json:"project_key,omitempty"`
 	Stage              string          `json:"stage"`
@@ -159,26 +160,44 @@ func validHash(s string) bool {
 }
 
 func (r *record) valid() bool {
+	if r.Version != 4 && r.WorkspaceKind != "" {
+		return false
+	}
 	switch r.Version {
 	case 1, 2:
 		if r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" || (r.Version == 1 && r.ProjectID != "") || (r.Version == 2 && !validUUID(r.ProjectID)) {
 			return false
 		}
-	case 3:
+	case 3, 4:
 		if !validUUID(r.ProjectKey) || r.ProjectKey == r.Key ||
 			(r.RequestedWorkspace != "" && (!validUUID(r.RequestedWorkspace) || r.WorkspaceID != "")) ||
 			(r.WorkspaceID != "" && !validUUID(r.WorkspaceID)) ||
 			(r.ProjectID != "" && (r.WorkspaceID == "" || !validUUID(r.ProjectID))) {
 			return false
 		}
-		if r.Stage == "canvas" || r.Stage == "video" {
-			return r.SpecHash == "" && r.Key == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
+		if r.Version == 4 {
+			switch r.WorkspaceKind {
+			case personalWorkspaceKind:
+				// The personal route returns both IDs together.
+				if r.RequestedWorkspace != "" || (r.WorkspaceID == "") != (r.ProjectID == "") {
+					return false
+				}
+			case teamWorkspaceKind:
+				if r.WorkspaceID == "" && r.RequestedWorkspace == "" {
+					return false
+				}
+			default:
+				return false
+			}
 		}
-		if r.ProjectID == "" && r.Stage != "uploading" {
+		if r.ProjectID == "" && (r.Stage == "prepared" || r.Stage == "submitted") {
 			return false
 		}
 	default:
 		return false
+	}
+	if r.Stage == "video" || (r.Version >= 3 && r.Stage == "canvas") {
+		return r.SpecHash == "" && r.Key == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
 	}
 	if !validUUID(r.Key) || !validHash(r.SpecHash) {
 		return false

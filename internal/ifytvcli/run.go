@@ -30,16 +30,22 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 	if problem != nil {
 		return result, problem
 	}
-	if problem := checkCanvasDestination(r, o); problem != nil {
+	if problem := file.bindCanvasDestination(r, o); problem != nil {
+		result.WorkspaceID, result.WorkspaceKind = r.WorkspaceID, r.WorkspaceKind
 		return result, problem
 	}
-	if r != nil {
-		o.project = r.ProjectID
-		result.WorkspaceID = r.WorkspaceID
+	if r == nil {
+		// Preserve the destination even if the model catalog or references are unavailable.
+		// A bare retry resumes the original canvas or direct task.
+		r, problem = file.reserveVideo(o)
+		if problem != nil {
+			return result, problem
+		}
 	}
-	c.addCanvasLocation(&result, o.project, "")
+	result.WorkspaceID, result.WorkspaceKind = r.WorkspaceID, r.WorkspaceKind
+	c.addCanvasLocation(&result, r.ProjectID, "")
 	refs := spec.references()
-	hasSpec := r != nil && r.SpecHash != ""
+	hasSpec := r.SpecHash != ""
 	if hasSpec && (r.SpecHash != specHash || len(r.Refs) != len(refs)) {
 		return result, runConflict()
 	}
@@ -54,20 +60,12 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 			return result, runConflict()
 		}
 	}
-	if r != nil && r.Task != nil {
+	if r.Task != nil {
 		result.TaskID, result.Task = r.Task.ID, r.Task.Task
 		c.addCanvasLocation(&result, r.ProjectID, r.Task.NodeID)
 		return withTaskStatus(result)
 	}
-	// Remember an on-canvas request before discovery. A catalog outage or a
-	// choice between teams must never turn a same-name retry into a direct task.
-	if r == nil && o.autoProject {
-		r, problem = file.reserveCanvas("video", o.workspace)
-		if problem != nil {
-			return result, problem
-		}
-	}
-	if r != nil && r.ProjectKey != "" && r.ProjectID == "" {
+	if r.ProjectKey != "" && r.ProjectID == "" {
 		if problem := c.requireCanvasDevice(); problem != nil {
 			return result, problem
 		}
@@ -85,13 +83,6 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 			if err != nil {
 				return result, fail("state_unavailable", "Cannot generate a secure idempotency key.")
 			}
-			if r == nil {
-				if o.project != "" {
-					r = &record{Version: 2, ProjectID: o.project}
-				} else {
-					r = &record{Version: 1}
-				}
-			}
 			r.Stage, r.Key, r.SpecHash = "uploading", key, specHash
 			r.Refs = make([]savedRef, len(refs))
 			for i, ref := range refs {
@@ -105,7 +96,7 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 			}
 		}
 		if r.ProjectKey != "" {
-			if problem := c.ensureCanvas(ctx, file, r, o.workspace, &result); problem != nil {
+			if problem := c.ensureCanvas(ctx, file, r, &result); problem != nil {
 				return result, problem
 			}
 			c.report("Canvas: " + result.ProjectURL)
@@ -161,6 +152,17 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 		return result, problem
 	}
 	return withTaskStatus(result)
+}
+
+func (f *stateFile) reserveVideo(o options) (*record, *failure) {
+	if o.project == "" && !o.noCanvas {
+		return f.reserveCanvas("video", o.workspace)
+	}
+	r := &record{Version: 1, Stage: "video"}
+	if o.project != "" {
+		r.Version, r.ProjectID = 2, o.project
+	}
+	return r, f.save(r)
 }
 
 func withTaskStatus(result output) (output, *failure) {

@@ -23,8 +23,8 @@ ifytv auth wait [--authorization-id ID] [--timeout DURATION] [--json]
 ifytv auth status [--json]
 ifytv auth logout [--json]
 ifytv canvas workspaces [--json]
-ifytv canvas create --run NAME [--workspace UUID] [--json]
-ifytv video create --spec FILE --run NAME [--project UUID|URL|auto] [--workspace UUID] [--json]
+ifytv canvas create --run NAME [--workspace personal|TEAM_UUID] [--json]
+ifytv video create --spec FILE --run NAME [--project UUID|URL|auto] [--workspace personal|TEAM_UUID] [--no-canvas] [--json]
 ifytv video status (--run NAME | --task UUID) [--json]
 ifytv video wait (--run NAME | --task UUID) [--interval 4s] [--timeout DURATION] [--json]
 ifytv video download (--run NAME | --task UUID) --out FILE [--json]
@@ -37,9 +37,10 @@ IFYTV_INSTALL_HOME selects a portable installation without changing PATH.
 Sign in with ifytv auth login, open the printed link, then run ifytv auth wait.
 IFYTV_API_KEY overrides the saved login. IFYTV_BASE_URL selects the site.
 Use --authorization-id ID on video and canvas commands to require one specific device approval.
-With --project, the canvas shows the references and prompt before generation.
-Use a cloud canvas link from the selected site, or --project auto to create a team
-canvas with device sign-in. Use --workspace to select a writable team.
+New runs use My Canvases in the signed-in account's personal cloud by default.
+Use --project URL or UUID to reuse a cloud canvas. Use --workspace TEAM_UUID
+to create in a particular team, or --no-canvas for a video task without a canvas.
+The canvas shows the references and prompt before generation.
 The same video card shows progress and plays the result. Repeat create with the same
 run name and inputs to resume. IFYTV_STATE_DIR overrides the private run directory.`
 
@@ -53,7 +54,7 @@ func validUUID(id string) bool {
 type options struct {
 	command, spec, run, task, project, out string
 	authorizationID, agent, workspace      string
-	autoProject                            bool
+	autoProject, noCanvas                  bool
 	interval, timeout                      time.Duration
 }
 
@@ -116,7 +117,7 @@ func parseArgs(args []string) (options, *failure) {
 	}
 	if o.command == "video create" || o.command == "canvas create" {
 		f.Func("workspace", "", func(id string) error {
-			if !validUUID(id) || (o.workspace != "" && !strings.EqualFold(id, o.workspace)) {
+			if (id != personalWorkspaceKind && !validUUID(id)) || (o.workspace != "" && !strings.EqualFold(id, o.workspace)) {
 				return errors.New("invalid workspace")
 			}
 			o.workspace = strings.ToLower(id)
@@ -137,6 +138,7 @@ func parseArgs(args []string) (options, *failure) {
 	case "video create":
 		f.StringVar(&o.spec, "spec", "", "")
 		f.StringVar(&o.run, "run", "", "")
+		f.BoolVar(&o.noCanvas, "no-canvas", false, "")
 	case "video status", "video wait", "video download", "canvas import":
 		f.StringVar(&o.run, "run", "", "")
 		f.StringVar(&o.task, "task", "", "")
@@ -182,8 +184,13 @@ func parseArgs(args []string) (options, *failure) {
 				}
 			}
 		}
-		if o.workspace != "" && !o.autoProject {
-			return o, fail("usage", "Use --workspace with --project auto.")
+		if o.noCanvas && (projectRequested || o.workspace != "") {
+			return o, fail("usage", "Use --no-canvas on its own to submit a video without a canvas.")
+		}
+		if o.project != "" {
+			// The workspace flag selects where to create a new canvas. A supplied
+			// project is already the destination, regardless of its workspace.
+			o.workspace = ""
 		}
 	case "video status", "video wait", "video download", "canvas import":
 		if (o.run == "") == (o.task == "") {
@@ -297,7 +304,7 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 	if o.run != "" {
 		r, problem := c.submittedRun(ctx, o.run)
 		if r != nil && o.command != "canvas import" {
-			result.WorkspaceID = r.WorkspaceID
+			result.WorkspaceID, result.WorkspaceKind = r.WorkspaceID, r.WorkspaceKind
 			c.addCanvasLocation(&result, r.ProjectID, "")
 		}
 		if problem != nil {

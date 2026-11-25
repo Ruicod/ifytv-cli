@@ -1,6 +1,6 @@
 # IFYTV CLI 和 Agent Skill
 
-把图片、配音、台词和已有云画布的链接交给 Agent，它会把素材和提示词连到画布上的一张视频卡。你可以在原卡看进度、播放成片，也可以让 Agent 下载 MP4。开发版还支持在没有画布链接时，由 Agent 为这条视频新建团队画布。
+把图片、配音和台词交给 Agent，它会把素材和提示词连到 IFYTV 云画布上的一张视频卡。你可以在原卡看进度、播放成片，也可以让 Agent 下载 MP4。已发布的版本支持在已有云画布上生成，开发版还可以为你新建个人云端画布。
 
 ## 一行安装
 
@@ -80,7 +80,7 @@ npx skills add Ruicod/ifytv-cli@v0.2.0-rc.5 -g
 
 ## 第一次生成视频
 
-打开 Agent 新对话，把**可编辑的 IFYTV 云画布链接**和素材给它。比如这样告诉它。
+要在已有画布生成视频，把**可编辑的 IFYTV 云画布链接**和素材一起发给 Agent。比如这样告诉它。
 
 > 在这张画布上，用这五张图和三段 MP3 做一条 15 秒的视频。三段声音依次对应修表师、邮差和学徒，按我给的台词生成。做好后把 MP4 下载到当前目录。
 
@@ -90,22 +90,24 @@ npx skills add Ruicod/ifytv-cli@v0.2.0-rc.5 -g
 
 ### 没有画布链接时（开发版）
 
-自动建画布需要配套的开发版 CLI 和站点服务。上面的一行安装命令仍安装已发布的 `v0.2.0-rc.5`，该版支持在已有画布上生成。
+自动建画布需要配套的开发版 CLI 和站点服务。上面的一行安装命令安装的是已发布的 `v0.2.0-rc.5`，该版可在已有画布上生成。
 
-使用开发版时，可以直接说「用这些素材生成视频，把能看进度和成片的画布链接发给我」。给过画布链接，Agent 就把完整链接交给 CLI 核对站点，沿用这张画布。没有链接时，Agent 用设备授权在可写的默认团队或唯一可写团队新建画布，把链接发给你，再跟进同一张卡。你可以点名团队。如果需要选择，Agent 会列出可用的团队。
+可以直接说「用这些素材生成视频，把画布链接发给我」。没给链接时，Agent 会在当前登录账号的 **我的画布 → 云端画布** 新建项目。它保存在站点，换设备登录同一账号也能打开。给了可编辑的同站云画布链接，就在链接指向的原项目生成，即使同时提到了团队。只有你明确指定团队时，Agent 才在那个团队新建。
+
+Agent 会自动运行 `ifytv auth status --json`，保存当前设备的授权 ID。首次登录按前节完成授权。下面引号中的 ID 取自这次设备授权，首次创建和断线续办都用同一个值。
 
 ```sh
-ifytv video create --project auto --spec ./shot.json --run shot-07 --json
-ifytv video wait --run shot-07 --json
+ifytv video create --workspace personal --spec ./shot.json --run shot-07 --authorization-id '<本次ID>' --json
+ifytv video wait --run shot-07 --authorization-id '<本次ID>' --json
 ```
 
-指定团队时，用 `ifytv canvas workspaces --json` 核对可写团队，将团队 UUID 传给 `--workspace`。如果创建命令返回团队选项，选定后重试原命令，并将本次响应的 `authorization_id` 传给 `--authorization-id`。设备授权缺少建画布权限时，可在原站点补授权后继续。
+只建个人空画布用 `ifytv canvas create --workspace personal --run storyboard --authorization-id '<本次ID>' --json`，这一步不提交视频任务。新版 CLI 的这两条创建命令都默认选个人云端画布。示例显式写出 `--workspace personal`，旧客户端遇到它会提示错误。升级或补授权后沿用原运行名续办。[开发版 Agent 操作说明](skills/ifytv/SKILL.md#在用户的画布上生成) · [镜头规格示例](skills/ifytv/examples/h3.json)
 
-只想先建空画布可用 `ifytv canvas create --run shot-07 --json`。这一步不提交视频生成任务，断线后仍用原运行名重试这条命令。[开发版 Agent 操作说明](skills/ifytv/SKILL.md#在用户的画布上生成) · [镜头规格示例](skills/ifytv/examples/h3.json)
+要建在指定团队，先用 `ifytv canvas workspaces --json` 查看可写团队。创建时传入 `--workspace <团队UUID>`，并把列表返回的 `authorization_id` 传给 `--authorization-id`。只说「放到团队」或遇到同名团队时，Agent 会请你指明要用哪个团队。
 
 ## 直接使用命令行
 
-CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE_URL` 设为该画布的 HTTPS 根地址。设备凭据按站点保存在本机当前用户的私有目录中，已有自动化也可通过 `IFYTV_API_KEY` 指定视频身份。
+CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE_URL` 设为该画布的 HTTPS 根地址。新建个人或团队画布需要设备授权。设备凭据按站点保存在本机当前用户的私有目录中。已有自动化可通过 `IFYTV_API_KEY` 操作这把 Key 已获授权的项目。
 
 | 用途 | 命令 |
 | --- | --- |
@@ -119,6 +121,8 @@ CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE
 | 下载成片 | `ifytv video download --run shot-07 --out ./shot-07.mp4` |
 | 把已有任务导入画布 | `ifytv canvas import --project <项目UUID> --task <任务UUID> --json` |
 
+只要本地 MP4 时，先运行 `ifytv video create --help`。帮助里列出 `--no-canvas`，就用 `ifytv video create --no-canvas --spec ./shot.json --run local-07 --json`，即使版本号显示 rc.5 也一样。仅当已确认使用旧版 `v0.2.0-rc.5` 且帮助正常显示、没有该参数时，才用 `ifytv video create --spec ./shot.json --run local-07 --json`。出片后按同一运行名下载。
+
 项目 UUID 在画布链接 `…/canvas/cloud/<项目UUID>` 末尾。镜头规格里的相对路径以 JSON 所在目录为准，图片和音频按数组顺序上传。H3 示例含五张图和三段声音，替换素材路径及台词后使用。[查看 H3 镜头示例](https://github.com/Ruicod/ifytv-cli/blob/v0.2.0-rc.5/skills/ifytv/examples/h3.json)
 
 创建视频后保留 `task_id`、`node_id` 和 `project_url`。中断后用同一运行名查询，`run_pending` 表示可以沿用原项目、规格、素材及运行名重试。换电脑可用 `--task <任务UUID>` 替代 `--run`，并使用原站点和视频身份。收到项目授权链接时，在浏览器确认后重试原命令。重复导入同一任务会复用原卡。
@@ -127,4 +131,15 @@ CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE
 
 ## 从源码开发
 
-源码在 `dev` 分支，使用 Go 1.22 或更高版本。在仓库根目录运行 `go test ./...` 可执行测试。维护者可用 `go run ./tools/ifytv-release -version 0.2.0-rc.5 -out ./dist/candidates` 重建本版六个平台的 CLI、Skill 和一行安装包。[浏览开发分支](https://github.com/Ruicod/ifytv-cli/tree/dev)
+源码在 `dev` 分支，使用 Go 1.22 或更高版本。在仓库根目录运行 `go test ./...` 可执行测试。构建当前开发包时使用独立的预发布版本号和输出目录，例如下面的命令。[浏览开发分支](https://github.com/Ruicod/ifytv-cli/tree/dev)
+
+```sh
+go run ./tools/ifytv-release -version 0.2.0-dev.canvas.2 -out ./dist/dev-candidates
+```
+
+要重建已发布的 rc.5，从它对应的 Git 标签创建单独的工作目录，在那里构建六个平台的 CLI、Skill 和一行安装包。
+
+```sh
+git worktree add --detach ../ifytv-cli-rc.5 v0.2.0-rc.5
+go -C ../ifytv-cli-rc.5 run ./tools/ifytv-release -version 0.2.0-rc.5 -out ./dist/rc-rebuilds
+```

@@ -1,6 +1,6 @@
 ---
 name: ifytv
-description: 用 IFYTV 在指定或新建的团队云画布上放置图片、配音和提示词，生成视频、显示进度并在原卡播放。也可续查任务、下载 MP4、导入已有成片，或管理本机 IFYTV 授权。
+description: 用户要用 IFYTV 在已有画布、个人云端画布或指定团队画布上生成视频、在原卡看进度和播放，或要续查任务、下载 MP4、导入成片、管理本机设备授权时使用。
 ---
 
 # 用 IFYTV 生成视频和导入画布
@@ -11,7 +11,7 @@ description: 用 IFYTV 在指定或新建的团队云画布上放置图片、配
 
 由 Agent 运行 `ifytv --version`。如果刚装好且当前进程还查不到命令，或仍显示升级前的版本，直接调用当前用户目录的 `.local/bin/ifytv`（Windows 为 `.local/bin/ifytv.exe`）并核对版本。CLI 默认连接 IFYTV 官网，已有站点或脚本配置也可沿用。查看模型和准备镜头可直接继续。用 `ifytv models --json` 核对模型 ID、模式、时长、画幅与素材数量。
 
-用户要求生成、查询、下载或导入时，先执行相应命令。第一次返回 `authorization_required` 时，保留当前任务的规格、素材、运行名或任务 ID，按以下步骤继续。用户单独要求登录时，用 `ifytv auth login --json` 取得同样的链接。
+用户要求生成、查询、下载或导入时，按下文对应的步骤执行。第一次返回 `authorization_required` 时，保留当前任务的规格、素材、运行名或任务 ID，按以下步骤继续。用户单独要求登录时，用 `ifytv auth login --json` 取得同样的链接。
 
 1. 立即把返回的 `authorization_url` 和 `user_code` 展示在对话中。例如「[打开 IFYTV 授权页](授权链接)，核对设备码和计费账号后点“允许”。我会接着处理刚才的视频。」链接和设备码使用本次响应的实际值。用户在自己的浏览器登录并决定是否允许。
 2. 从这次返回里保留 `authorization_id`。发出链接后，立即运行 `ifytv auth wait --authorization-id <本次ID> --json`。返回 `authenticated` 后，在原命令上加同一个 `--authorization-id <本次ID>` 再执行，保留原来的规格、运行名或任务 ID。这样即使同机另一个对话换号，也只有刚才批准的设备授权能继续这项请求。用户无需回复“好了”。等待中断时也带同一个 ID 继续等待。
@@ -23,30 +23,40 @@ description: 用 IFYTV 在指定或新建的团队云画布上放置图片、配
 
 ## 在用户的画布上生成
 
-用户要求用图片、配音或提示词生成视频时，按下节准备镜头规格，为镜头选一个固定的运行名。沿用对话中指定的云画布或该运行已绑定的画布。没有目标画布时，由 Agent 在用户有创建权限的团队空间新建。用户也要下载 MP4 时，在画布出片后下载。只有明确只要本地文件时，才按下节省略 `--project`。
+用户要求生成新视频时，按下节准备镜头规格，为镜头选一个固定的运行名。续办已有运行时，沿用原项目、任务和视频卡。用户也要 MP4 时，等原卡出片后下载。只有用户明确只要本地文件时才走下节的 `--no-canvas` 流程。
 
-用户已给画布链接时，开发版把完整链接交给 `--project`，由 CLI 核对站点和画布路径。将下面引号内的文字换成用户的原链接。如果用户只给了项目 UUID，也可直接传入。使用已发布的 `v0.2.0-rc.5` 时，先确认链接与 CLI 同站，再从 `/canvas/cloud/<项目UUID>` 取出 UUID 传给 `--project`。
+**给了项目链接时用原画布。** 即使用户同时提到了团队，也优先使用给定的可编辑同站云画布。开发版将完整链接交给 `--project` 校验站点和画布路径。把下面引号内的文字换成用户原链接。若只给了项目 UUID，也可直接传入。已发布的 `v0.2.0-rc.5` 需要先核对链接与 CLI 同站，再从 `/canvas/cloud/<项目UUID>` 取出 UUID 传给 `--project`。跨站、链接无效或没有编辑权限时，报告原链接的问题，保留目标项目。
 
 ```sh
 ifytv video create --project '<完整画布链接>' --spec ./shot.json --run shot-07 --json
 ```
 
-没有画布时，直接用同一个运行名建画布并提交镜头。自动创建需要配套的开发版 CLI 和站点服务。
+**没给链接、也没指定团队时，新建到当前登录账号的「我的画布 → 云端画布」。** 换设备登录同一站点和账号也能打开，不依赖当前浏览器的本地存储。直接创建个人画布，无需列出团队或请用户选空间。新运行在配套开发版 CLI 上默认选择个人云端画布。Agent 对两条创建命令都显式写 `--workspace personal`，这样旧团队预览版或 rc.5 会在不支持时报告错误。
+
+首次创建个人视频或空画布前，Agent 先在本机运行 `ifytv auth status --json`。若 `status` 为 `authenticated` 且 `source` 为 `device`，立即保存响应的 `authorization_id`。若为 `signed_out`，执行 `ifytv auth login --json`，按上节展示授权链接并等待。若已有待批准的授权，沿用它的链接和 ID 等待。若 `source` 为 `environment`，按下节的 Key 权限说明处理。取得本次设备授权 ID 后再首次创建，把下面引号中的 ID 换成实际值。首次回执丢失或同机其他对话换号时，所有续查和重试仍传原 ID。
 
 ```sh
-ifytv video create --project auto --spec ./shot.json --run shot-07 --json
+ifytv video create --workspace personal --spec ./shot.json --run shot-07 --authorization-id '<本次ID>' --json
 ```
 
-- 用户指定团队时，用 `ifytv canvas workspaces --json` 找到对应的可写团队，给创建命令加 `--workspace <团队UUID>`。未指定时，沿用站点的可写默认团队或唯一可写团队。没有可写团队时，说明当前账号缺少建画布权限。
-- 若返回 `workspace_selection_required`，列出响应中的团队名称和 ID，只请用户选团队。即使首次命令没有带授权 ID，这条响应也会返回当前设备登录的 `authorization_id`。Agent 保存这个非敏感的授权编号，在原命令上加 `--workspace <所选团队UUID> --authorization-id <响应中的ID>`，沿用原运行名重试。
-- 用户只想建空画布时，运行 `ifytv canvas create --run shot-07 --json`，也可以指定 `--workspace`。画布以运行名命名，收到 `project_url` 就交付。这一步不产生视频生成费用。若断线或收到 `run_pending`，只重试原来的 `canvas create`，保留原运行名、团队和设备授权。
-- 首次连接按上节完成设备授权。`IFYTV_API_KEY` 可用于这把 Key 已获授权的项目。自动新建画布需要设备身份，先让使用 Key 的用户决定是否改用设备授权。已有项目若返回含 `?project=` 的 `authorization_url`，把链接交给用户，获准后重试原命令。保持原计费账号、运行名、项目、规格和已取得的授权 ID。
-- `canvas_workspace_scope_required`（403）表示这次设备授权缺少建团队画布的权限。引导用户在原站点补授权。旧授权仍有效时，重跑 `auth login` 会复用旧授权。若需注销旧设备授权或切换身份，先取得用户确认。用原账号、原视频身份完成补授权后，给原创建命令带上 `--authorization-id <新授权ID>` 和原运行名继续。
-- `canvas_creation_unavailable` 表示当前站点尚未开放 CLI 建团队画布，例如旧接口返回 404。若 CLI 无法识别新命令，则需配套的客户端。保留本次运行，待相应版本就绪后在原站点续办。
+用户只想建个人空画布时使用下面的命令。这一步不提交视频任务。断线或收到 `run_pending` 时，用相同运行名和工作区重试原来的 `canvas create`。
 
-一拿到云画布链接就发给用户。CLI 可能在提交镜头前先把链接写到标准错误，任务待提交时也可打开画布。收到 `task_id` 后，给出任务 ID 和指向原卡的 `project_url`。参考素材和提示词连接同一张视频卡。运行 `ifytv video wait --run shot-07 --json` 跟进这张卡，已有的授权 ID 也传给等待命令。按站点返回的阶段更新进度，仅在返回 `progress` 时报告百分比。保存完成后给出同一 `node_id` 的播放链接。只拿到保存回执时报告「成片已保存到原卡」，实际打开播放后再报告播放验证结果。
+```sh
+ifytv canvas create --workspace personal --run storyboard --authorization-id '<本次ID>' --json
+```
 
-提交视频时若网络中断，先查 `video status --run shot-07`。任务已存在就等原任务，`run_pending` 就按保存的项目、规格及运行名重试。遇到项目冲突先核对用户的原意。普通下载任务可在出片后导入，画布生成的同一成片导入原项目会复用原卡。
+**没给链接且明确要求建到团队时，使用用户指定的团队。** 运行 `ifytv canvas workspaces --json`，若已有本次设备授权 ID 也传给它。列表只含可写团队。保存响应的 `authorization_id`，将用户给出的名称或 UUID 与列表精确匹配。唯一匹配时直接使用。仅说「放到团队」或同名团队有多个时，列出名称和 UUID 请用户选择。指定团队不在可写列表中时，说明该账号无法在指定团队创建，保留原目标。对 `video create` 和 `canvas create`，使用 `--workspace <团队UUID> --authorization-id <列表返回的ID>`。视频命令也支持 `--project auto --workspace <团队UUID>`，同样带上该授权 ID。
+
+### 授权和中断恢复
+
+- 新建个人或团队画布都需要设备授权。原始 `IFYTV_API_KEY` 可用于已获授权的项目。用 Key 的用户要新建时，说明原因，由用户决定是否用原站点、原账号和原视频身份完成设备授权。已有项目返回含 `?project=` 的 `authorization_url` 时，请用户授权该项目，然后重试原命令。
+- 遇到 `canvas_workspace_scope_required` 时，在原站点补齐设备权限。有效的旧授权会被 `auth login` 复用，如需注销旧设备授权，先取得用户同意。用原账号和视频身份补授权后，带 `--authorization-id <新授权ID>` 和原运行名继续。
+- 个人创建遇到不支持的参数或接口、`canvas_creation_unavailable`、权限错误、返回不完整或只建好了画布时，保留个人目标及同一次运行，说明已完成哪一步。在原站点更新、补授权或恢复连接后，用相同的 `--workspace personal` 续办。禁止回退到不带工作区的 `--project auto`、不带目标的旧版 `video create`、团队画布或直接视频任务。
+- `legacy_team_confirmation_required` 表示旧团队预览版的这次运行可能已经向某个团队发送过创建请求。把记录中的团队 UUID 告诉用户，等用户明确同意在该团队继续，才用 `--workspace <原团队UUID>` 重试原命令。保留原设备授权和运行名，让 CLI 复用原幂等键。等待确认期间不要向团队提交请求。
+
+CLI 一返回已确认的云画布链接，就发给用户。提交镜头前 CLI 可能先把链接写到标准错误。收到 `task_id` 后，给出任务 ID 和指向原卡的 `project_url`。素材和提示词连接同一张视频卡。运行 `ifytv video wait --run shot-07 --json` 跟进这张卡，已有的授权 ID 也传给等待命令。按站点返回的阶段更新进度，仅在返回 `progress` 时报告百分比。保存完成后给出同一 `node_id` 的播放链接。只拿到保存回执时报告「成片已保存到原卡」，实际打开播放后再报告播放验证结果。
+
+提交视频时若网络中断，先查 `video status --run shot-07`。任务已存在就等原任务，`run_pending` 就用原项目或工作区、规格、素材、运行名及授权重试。遇到项目冲突先核对用户的原意。普通下载任务可在出片后导入，画布生成的同一成片导入原项目会复用原卡。
 
 若模型已出片，但保存时提示空间不足或当日上传额度用完，给用户原卡链接并保留任务 ID。腾出空间或额度恢复后，对原项目和任务执行 `canvas import`，成片会回到这张卡。遇到建单限流则等站点允许后，使用原运行名及规格续办。
 
@@ -65,16 +75,18 @@ ifytv video create --project auto --spec ./shot.json --run shot-07 --json
    | 图 4 | 钟表铺场景 | — | — |
    | 图 5 | 怀表道具 | — | — |
 
-3. 只要求准备或检查规格时，交付规格和对应表即可。用户要求实际生成时，`video create` 会上传素材并提交可能计费的任务。取本次镜头独有的运行名，记录返回的 `task_id`。
+3. 只要求准备或检查规格时，交付规格和对应表即可。用户明确只要本地 MP4 时，先用本次要执行的 CLI 运行 `ifytv video create --help`。只要帮助列出 `--no-canvas`，就显式用它上传素材并提交可能计费的视频任务，即使 `ifytv --version` 显示 rc.5 也一样。记录返回的 `task_id`，按同一运行名等待及下载。
 
 ```sh
-ifytv video create --spec ./shot.json --run shot-07 --json
-ifytv video status --run shot-07 --json
-ifytv video wait --run shot-07 --json
-ifytv video download --run shot-07 --out ./shot-07.mp4
+ifytv video create --no-canvas --spec ./shot.json --run local-07 --json
+ifytv video status --run local-07 --json
+ifytv video wait --run local-07 --json
+ifytv video download --run local-07 --out ./local-07.mp4
 ```
 
-恢复已有视频运行时，先用 `video status --run` 查询。返回 `run_pending` 表示在当前视频身份下找到了原记录，此时用原素材、规格和运行名重试创建即可恢复。返回 `run_not_found` 时，先核对原站点和身份。同一账号可能有多把视频 Key，设备授权使用第一把可用的视频渠道 Key。旧脚本若使用另一把 Key，需要沿用原凭据或找回原任务 ID 后按原身份查询。查询不到旧记录时直接建单可能重复计费。
+仅当用户明确只要本地 MP4、已确认是旧版 `v0.2.0-rc.5`，且本机帮助正常显示、没有 `--no-canvas` 时，才用旧版命令 `ifytv video create --spec ./shot.json --run local-07 --json`。新版的同一写法默认新建个人云端画布。帮助读取失败或版本来源不明时，先核对可执行文件和安装来源，保留原运行。
+
+恢复已有视频运行时，先用 `video status --run` 查询。返回 `run_pending` 表示在当前视频身份下找到了原记录，保留原生成方式、素材、规格和运行名续办。返回 `run_not_found` 时，先核对原站点和身份。同一账号可能有多把视频 Key，设备授权使用第一把可用的视频渠道 Key。旧脚本若使用另一把 Key，需要沿用原凭据或找回原任务 ID 后按原身份查询。查询不到旧记录时直接建单可能重复计费。
 
 已知任务 ID 时可直接续查。等待中断后再次运行 `video wait`。若任务已失败，带上任务 ID 和错误原因给用户。下载时选用户指定的输出位置。模型可能混淆声线或说话人，需要逐句试听成片才能评价实际配音。
 

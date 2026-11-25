@@ -82,7 +82,7 @@ func TestKilledCreateProcessReplaysDurableRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	command := func() *exec.Cmd {
-		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIProcess$", "--", "video", "create", "--spec", spec, "--run", "crash", "--json")
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIProcess$", "--", "video", "create", "--no-canvas", "--spec", spec, "--run", "crash", "--json")
 	}
 	first := command()
 	if err := first.Start(); err != nil {

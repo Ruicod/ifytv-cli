@@ -51,6 +51,7 @@ type output struct {
 	TaskID             string             `json:"task_id,omitempty"`
 	Run                string             `json:"run,omitempty"`
 	WorkspaceID        string             `json:"workspace_id,omitempty"`
+	WorkspaceKind      string             `json:"workspace_kind,omitempty"`
 	Workspaces         *[]canvasWorkspace `json:"workspaces,omitempty"`
 	DefaultWorkspaceID string             `json:"default_workspace_id,omitempty"`
 	ProjectID          string             `json:"project_id,omitempty"`

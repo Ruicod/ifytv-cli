@@ -52,11 +52,12 @@ type asset struct {
 }
 
 type manifest struct {
-	Version               string  `json:"version"`
-	DeviceAuthorization   bool    `json:"device_authorization"`
-	CanvasGeneration      bool    `json:"canvas_generation"`
-	CanvasProjectCreation bool    `json:"canvas_project_creation"`
-	Assets                []asset `json:"assets"`
+	Version                string  `json:"version"`
+	DeviceAuthorization    bool    `json:"device_authorization"`
+	CanvasGeneration       bool    `json:"canvas_generation"`
+	CanvasProjectCreation  bool    `json:"canvas_project_creation"`
+	PersonalCanvasCreation bool    `json:"personal_canvas_creation"`
+	Assets                 []asset `json:"assets"`
 }
 
 type archiveEntry struct {
@@ -118,7 +119,10 @@ func pack(out, version string) (err error) {
 	if err != nil {
 		return err
 	}
-	doc := manifest{Version: version, DeviceAuthorization: true, CanvasGeneration: true, CanvasProjectCreation: true}
+	doc := manifest{
+		Version: version, DeviceAuthorization: true, CanvasGeneration: true,
+		CanvasProjectCreation: true, PersonalCanvasCreation: true,
+	}
 	digests := make(map[platform]string, len(platforms))
 	for _, target := range platforms {
 		program, err := buildCLI(stage, source, version, target)
