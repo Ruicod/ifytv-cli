@@ -69,7 +69,7 @@ func (c *client) runCommand(ctx context.Context, o options, original output) (ou
 		return auth, authorizationRequired()
 	}
 	result, problem := c.execute(ctx, o)
-	result.AuthorizationID = o.authorizationID
+	result.AuthorizationID = auth.AuthorizationID
 	if problem == nil || !problem.invalidDevice {
 		return result, problem
 	}

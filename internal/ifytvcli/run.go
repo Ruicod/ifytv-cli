@@ -30,25 +30,27 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 	if problem != nil {
 		return result, problem
 	}
-	if r != nil && o.project != "" && r.ProjectID != o.project {
-		return result, fail("run_project_conflict", "This name belongs to a different destination. Resume the original run or choose a new name for a separate video.")
+	if problem := checkCanvasDestination(r, o); problem != nil {
+		return result, problem
 	}
 	if r != nil {
 		o.project = r.ProjectID
+		result.WorkspaceID = r.WorkspaceID
 	}
 	c.addCanvasLocation(&result, o.project, "")
 	refs := spec.references()
-	if r != nil && (r.SpecHash != specHash || len(r.Refs) != len(refs)) {
+	hasSpec := r != nil && r.SpecHash != ""
+	if hasSpec && (r.SpecHash != specHash || len(r.Refs) != len(refs)) {
 		return result, runConflict()
 	}
 	// A saved receipt permits an absent local file unless it needs uploading
 	// again. Any local file still present must match the original digest.
 	for i := range refs {
-		committed := r != nil && r.Refs[i].URL != ""
+		committed := hasSpec && r.Refs[i].URL != ""
 		if problem := refs[i].inspect(filepath.Dir(o.spec), committed); problem != nil {
 			return result, problem
 		}
-		if r != nil && refs[i].hash != "" && refs[i].hash != r.Refs[i].Hash {
+		if hasSpec && refs[i].hash != "" && refs[i].hash != r.Refs[i].Hash {
 			return result, runConflict()
 		}
 	}
@@ -57,7 +59,20 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 		c.addCanvasLocation(&result, r.ProjectID, r.Task.NodeID)
 		return withTaskStatus(result)
 	}
-	if r == nil || r.Stage == "uploading" {
+	// Remember an on-canvas request before discovery. A catalog outage or a
+	// choice between teams must never turn a same-name retry into a direct task.
+	if r == nil && o.autoProject {
+		r, problem = file.reserveCanvas("video", o.workspace)
+		if problem != nil {
+			return result, problem
+		}
+	}
+	if r != nil && r.ProjectKey != "" && r.ProjectID == "" {
+		if problem := c.requireCanvasDevice(); problem != nil {
+			return result, problem
+		}
+	}
+	if !hasSpec || r.Stage == "uploading" {
 		models, problem := c.models(ctx)
 		if problem != nil {
 			return result, problem
@@ -65,16 +80,20 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 		if problem := spec.validate(models); problem != nil {
 			return result, problem
 		}
-		if r == nil {
+		if !hasSpec {
 			key, err := newKey()
 			if err != nil {
 				return result, fail("state_unavailable", "Cannot generate a secure idempotency key.")
 			}
-			r = &record{Version: 1, Stage: "uploading", Key: key, SpecHash: specHash, Refs: make([]savedRef, len(refs))}
-			if o.project != "" {
-				// Older binaries must not resume an on-canvas run through /tasks.
-				r.Version, r.ProjectID = 2, o.project
+			if r == nil {
+				if o.project != "" {
+					r = &record{Version: 2, ProjectID: o.project}
+				} else {
+					r = &record{Version: 1}
+				}
 			}
+			r.Stage, r.Key, r.SpecHash = "uploading", key, specHash
+			r.Refs = make([]savedRef, len(refs))
 			for i, ref := range refs {
 				r.Refs[i].Hash = ref.hash
 				if ref.path == "" {
@@ -84,6 +103,12 @@ func (c *client) create(ctx context.Context, o options) (output, *failure) {
 			if problem := file.save(r); problem != nil {
 				return result, problem
 			}
+		}
+		if r.ProjectKey != "" {
+			if problem := c.ensureCanvas(ctx, file, r, o.workspace, &result); problem != nil {
+				return result, problem
+			}
+			c.report("Canvas: " + result.ProjectURL)
 		}
 		if problem := c.uploadMissing(ctx, refs, r, file); problem != nil {
 			return result, problem

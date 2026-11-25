@@ -233,10 +233,11 @@ func checkDistribution(t *testing.T, out, skill, example string) []byte {
 	dir := filepath.Join(out, "0.1.0")
 	manifest := readTestFile(t, filepath.Join(dir, "manifest.json"))
 	var doc struct {
-		Version             string
-		DeviceAuthorization bool `json:"device_authorization"`
-		CanvasGeneration    bool `json:"canvas_generation"`
-		Assets              []struct {
+		Version               string
+		DeviceAuthorization   bool `json:"device_authorization"`
+		CanvasGeneration      bool `json:"canvas_generation"`
+		CanvasProjectCreation bool `json:"canvas_project_creation"`
+		Assets                []struct {
 			Name, OS, Arch, URL, SHA256 string
 			Bytes                       int64
 		}
@@ -251,6 +252,9 @@ func checkDistribution(t *testing.T, out, skill, example string) []byte {
 	}
 	if !doc.CanvasGeneration {
 		t.Fatal("the packaged client must advertise in-place canvas generation")
+	}
+	if !doc.CanvasProjectCreation {
+		t.Fatal("the packaged client must advertise team canvas creation")
 	}
 	targets := [][2]string{{"windows", "amd64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"linux", "amd64"}, {"skill", "any"}}
 	if doc.Version != "0.1.0" || len(doc.Assets) != len(targets) {

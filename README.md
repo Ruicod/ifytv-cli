@@ -1,6 +1,6 @@
 # IFYTV CLI 和 Agent Skill
 
-把云画布链接、图片、配音和台词交给 Agent，它会把素材和提示词放到画布上，连到一张视频卡。你可以在原卡看进度、播放成片，也可以让 Agent 下载 MP4。
+把图片、配音、台词和已有云画布的链接交给 Agent，它会把素材和提示词连到画布上的一张视频卡。你可以在原卡看进度、播放成片，也可以让 Agent 下载 MP4。开发版还支持在没有画布链接时，由 Agent 为这条视频新建团队画布。
 
 ## 一行安装
 
@@ -88,6 +88,21 @@ npx skills add Ruicod/ifytv-cli@v0.2.0-rc.5 -g
 
 在画布上可以看到各张图片、可试听的配音和提示词连到了哪张视频卡。卡片显示排队、生成和保存状态，模型提供百分比时也会显示。关闭对话或刷新画布后服务器继续处理，协作者可以看到更新。出片后在同一张卡上播放。要续查可以说「查一下刚才的视频」，要断开授权可以说「退出这台设备的 IFYTV 授权」。
 
+### 没有画布链接时（开发版）
+
+自动建画布需要配套的开发版 CLI 和站点服务。上面的一行安装命令仍安装已发布的 `v0.2.0-rc.5`，该版支持在已有画布上生成。
+
+使用开发版时，可以直接说「用这些素材生成视频，把能看进度和成片的画布链接发给我」。给过画布链接，Agent 就把完整链接交给 CLI 核对站点，沿用这张画布。没有链接时，Agent 用设备授权在可写的默认团队或唯一可写团队新建画布，把链接发给你，再跟进同一张卡。你可以点名团队。如果需要选择，Agent 会列出可用的团队。
+
+```sh
+ifytv video create --project auto --spec ./shot.json --run shot-07 --json
+ifytv video wait --run shot-07 --json
+```
+
+指定团队时，用 `ifytv canvas workspaces --json` 核对可写团队，将团队 UUID 传给 `--workspace`。如果创建命令返回团队选项，选定后重试原命令，并将本次响应的 `authorization_id` 传给 `--authorization-id`。设备授权缺少建画布权限时，可在原站点补授权后继续。
+
+只想先建空画布可用 `ifytv canvas create --run shot-07 --json`。这一步不提交视频生成任务，断线后仍用原运行名重试这条命令。[开发版 Agent 操作说明](skills/ifytv/SKILL.md#在用户的画布上生成) · [镜头规格示例](skills/ifytv/examples/h3.json)
+
 ## 直接使用命令行
 
 CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE_URL` 设为该画布的 HTTPS 根地址。设备凭据按站点保存在本机当前用户的私有目录中，已有自动化也可通过 `IFYTV_API_KEY` 指定视频身份。
@@ -106,7 +121,7 @@ CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE
 
 项目 UUID 在画布链接 `…/canvas/cloud/<项目UUID>` 末尾。镜头规格里的相对路径以 JSON 所在目录为准，图片和音频按数组顺序上传。H3 示例含五张图和三段声音，替换素材路径及台词后使用。[查看 H3 镜头示例](https://github.com/Ruicod/ifytv-cli/blob/v0.2.0-rc.5/skills/ifytv/examples/h3.json)
 
-创建后保留 `task_id`、`node_id` 和 `project_url`。中断后用同一运行名查询，`run_pending` 表示可以沿用原项目、规格、素材及运行名重试。换电脑可用 `--task <任务UUID>` 替代 `--run`，并使用原站点和视频身份。收到项目授权链接时，在浏览器确认后重试原命令。重复导入同一任务会复用原卡。
+创建视频后保留 `task_id`、`node_id` 和 `project_url`。中断后用同一运行名查询，`run_pending` 表示可以沿用原项目、规格、素材及运行名重试。换电脑可用 `--task <任务UUID>` 替代 `--run`，并使用原站点和视频身份。收到项目授权链接时，在浏览器确认后重试原命令。重复导入同一任务会复用原卡。
 
 设备授权使用账号的第一把可用视频 Key。处理旧任务时，沿用创建任务时的视频身份。需要把脚本绑定到一次设备授权时，把响应里的 `authorization_id` 传给 `auth wait` 和后续命令的 `--authorization-id`。[查看完整 Skill 使用说明](https://github.com/Ruicod/ifytv-cli/blob/v0.2.0-rc.5/skills/ifytv/SKILL.md)
 

@@ -48,24 +48,27 @@ type Task struct {
 
 type output struct {
 	Task
-	TaskID           string          `json:"task_id,omitempty"`
-	Run              string          `json:"run,omitempty"`
-	ProjectID        string          `json:"project_id,omitempty"`
-	NodeID           string          `json:"node_id,omitempty"`
-	AssetID          string          `json:"asset_id,omitempty"`
-	ProjectURL       string          `json:"project_url,omitempty"`
-	Duplicate        *bool           `json:"duplicate,omitempty"`
-	AuthorizationURL string          `json:"authorization_url,omitempty"`
-	AuthorizationID  string          `json:"authorization_id,omitempty"`
-	UserCode         string          `json:"user_code,omitempty"`
-	Source           string          `json:"source,omitempty"`
-	Path             string          `json:"path,omitempty"`
-	Bytes            int64           `json:"bytes,omitempty"`
-	Models           *[]capability   `json:"models,omitempty"`
-	Version          string          `json:"version,omitempty"`
-	Help             string          `json:"help,omitempty"`
-	Installation     *install.Result `json:"installation,omitempty"`
-	Error            *failure        `json:"error,omitempty"`
+	TaskID             string             `json:"task_id,omitempty"`
+	Run                string             `json:"run,omitempty"`
+	WorkspaceID        string             `json:"workspace_id,omitempty"`
+	Workspaces         *[]canvasWorkspace `json:"workspaces,omitempty"`
+	DefaultWorkspaceID string             `json:"default_workspace_id,omitempty"`
+	ProjectID          string             `json:"project_id,omitempty"`
+	NodeID             string             `json:"node_id,omitempty"`
+	AssetID            string             `json:"asset_id,omitempty"`
+	ProjectURL         string             `json:"project_url,omitempty"`
+	Duplicate          *bool              `json:"duplicate,omitempty"`
+	AuthorizationURL   string             `json:"authorization_url,omitempty"`
+	AuthorizationID    string             `json:"authorization_id,omitempty"`
+	UserCode           string             `json:"user_code,omitempty"`
+	Source             string             `json:"source,omitempty"`
+	Path               string             `json:"path,omitempty"`
+	Bytes              int64              `json:"bytes,omitempty"`
+	Models             *[]capability      `json:"models,omitempty"`
+	Version            string             `json:"version,omitempty"`
+	Help               string             `json:"help,omitempty"`
+	Installation       *install.Result    `json:"installation,omitempty"`
+	Error              *failure           `json:"error,omitempty"`
 }
 
 func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...string) error {
@@ -125,6 +128,15 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 	if result.Models != nil {
 		for _, m := range *result.Models {
 			lines = append(lines, m.ID+"  "+m.DisplayName)
+		}
+	}
+	if result.Workspaces != nil {
+		for _, workspace := range *result.Workspaces {
+			label := workspace.ID + "  " + workspace.Name
+			if workspace.ID == result.DefaultWorkspaceID {
+				label += " (default)"
+			}
+			lines = append(lines, label)
 		}
 	}
 	if result.TaskID != "" {

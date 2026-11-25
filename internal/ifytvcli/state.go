@@ -21,14 +21,17 @@ type savedRef struct {
 }
 
 type record struct {
-	Version   int             `json:"version"`
-	ProjectID string          `json:"project_id,omitempty"`
-	Stage     string          `json:"stage"`
-	SpecHash  string          `json:"spec_sha256"`
-	Key       string          `json:"idempotency_key"`
-	Refs      []savedRef      `json:"references"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Task      *taskReply      `json:"task,omitempty"`
+	Version            int             `json:"version"`
+	ProjectID          string          `json:"project_id,omitempty"`
+	WorkspaceID        string          `json:"workspace_id,omitempty"`
+	RequestedWorkspace string          `json:"requested_workspace_id,omitempty"`
+	ProjectKey         string          `json:"project_key,omitempty"`
+	Stage              string          `json:"stage"`
+	SpecHash           string          `json:"spec_sha256"`
+	Key                string          `json:"idempotency_key"`
+	Refs               []savedRef      `json:"references"`
+	Payload            json.RawMessage `json:"payload,omitempty"`
+	Task               *taskReply      `json:"task,omitempty"`
 }
 
 func newKey() (string, error) {
@@ -156,10 +159,28 @@ func validHash(s string) bool {
 }
 
 func (r *record) valid() bool {
-	if !validUUID(r.Key) || !validHash(r.SpecHash) {
+	switch r.Version {
+	case 1, 2:
+		if r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" || (r.Version == 1 && r.ProjectID != "") || (r.Version == 2 && !validUUID(r.ProjectID)) {
+			return false
+		}
+	case 3:
+		if !validUUID(r.ProjectKey) || r.ProjectKey == r.Key ||
+			(r.RequestedWorkspace != "" && (!validUUID(r.RequestedWorkspace) || r.WorkspaceID != "")) ||
+			(r.WorkspaceID != "" && !validUUID(r.WorkspaceID)) ||
+			(r.ProjectID != "" && (r.WorkspaceID == "" || !validUUID(r.ProjectID))) {
+			return false
+		}
+		if r.Stage == "canvas" || r.Stage == "video" {
+			return r.SpecHash == "" && r.Key == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
+		}
+		if r.ProjectID == "" && r.Stage != "uploading" {
+			return false
+		}
+	default:
 		return false
 	}
-	if (r.ProjectID == "" && r.Version != 1) || (r.ProjectID != "" && (r.Version != 2 || !validUUID(r.ProjectID))) {
+	if !validUUID(r.Key) || !validHash(r.SpecHash) {
 		return false
 	}
 	for _, ref := range r.Refs {
@@ -247,7 +268,10 @@ func (c *client) submittedRun(ctx context.Context, name string) (*record, *failu
 		return nil, fail("run_not_found", "No run with this name exists for the current site and key.")
 	}
 	if r.Task == nil {
-		return nil, fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
+		if r.Stage == "canvas" {
+			return r, fail("run_pending", "This run is for a canvas only. Repeat canvas create with the same run name to recover its link.")
+		}
+		return r, fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
 	}
 	return r, nil
 }

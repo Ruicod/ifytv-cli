@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -21,11 +22,13 @@ ifytv auth login [--json]
 ifytv auth wait [--authorization-id ID] [--timeout DURATION] [--json]
 ifytv auth status [--json]
 ifytv auth logout [--json]
-ifytv video create --spec FILE --run NAME [--project UUID] [--json]
+ifytv canvas workspaces [--json]
+ifytv canvas create --run NAME [--workspace UUID] [--json]
+ifytv video create --spec FILE --run NAME [--project UUID|URL|auto] [--workspace UUID] [--json]
 ifytv video status (--run NAME | --task UUID) [--json]
 ifytv video wait (--run NAME | --task UUID) [--interval 4s] [--timeout DURATION] [--json]
 ifytv video download (--run NAME | --task UUID) --out FILE [--json]
-ifytv canvas import --project UUID (--run NAME | --task UUID) [--json]
+ifytv canvas import --project UUID|URL (--run NAME | --task UUID) [--json]
 ifytv --version
 
 Install copies this executable and its Agent Skill for the current user.
@@ -35,6 +38,8 @@ Sign in with ifytv auth login, open the printed link, then run ifytv auth wait.
 IFYTV_API_KEY overrides the saved login. IFYTV_BASE_URL selects the site.
 Use --authorization-id ID on video and canvas commands to require one specific device approval.
 With --project, the canvas shows the references and prompt before generation.
+Use a cloud canvas link from the selected site, or --project auto to create a team
+canvas with device sign-in. Use --workspace to select a writable team.
 The same video card shows progress and plays the result. Repeat create with the same
 run name and inputs to resume. IFYTV_STATE_DIR overrides the private run directory.`
 
@@ -47,8 +52,32 @@ func validUUID(id string) bool {
 
 type options struct {
 	command, spec, run, task, project, out string
-	authorizationID, agent                 string
+	authorizationID, agent, workspace      string
+	autoProject                            bool
 	interval, timeout                      time.Duration
+}
+
+func projectTarget(value string) (string, *failure) {
+	if validUUID(value) {
+		return strings.ToLower(value), nil
+	}
+	invalid := fail("invalid_project", "Supply a project UUID or a cloud canvas URL from this site.")
+	u, err := url.Parse(value)
+	if err != nil || !webURL(u) || u.RawPath != "" {
+		return "", invalid
+	}
+	c, problem := newClient(os.Getenv("IFYTV_BASE_URL"), "", false)
+	if problem != nil {
+		return "", problem
+	}
+	if origin(u) != origin(c.base) {
+		return "", fail("project_site_mismatch", "The canvas link belongs to another site. Select the matching IFYTV_BASE_URL and account.")
+	}
+	id, ok := strings.CutPrefix(strings.TrimSuffix(u.Path, "/"), c.base.Path+"/canvas/cloud/")
+	if !ok || !validUUID(id) {
+		return "", invalid
+	}
+	return strings.ToLower(id), nil
 }
 
 func parseArgs(args []string) (options, *failure) {
@@ -65,8 +94,18 @@ func parseArgs(args []string) (options, *failure) {
 	}
 	f := flag.NewFlagSet("ifytv", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	projectRequested := false
+	if o.command == "video create" || o.command == "canvas import" {
+		f.Func("project", "", func(value string) error {
+			if projectRequested && value != o.project {
+				return errors.New("conflicting projects")
+			}
+			o.project, projectRequested = value, true
+			return nil
+		})
+	}
 	switch o.command {
-	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import":
+	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import", "canvas create", "canvas workspaces":
 		f.Func("authorization-id", "", func(id string) error {
 			if !validRunScope(id) || (o.authorizationID != "" && o.authorizationID != id) {
 				return errors.New("invalid authorization ID")
@@ -75,18 +114,29 @@ func parseArgs(args []string) (options, *failure) {
 			return nil
 		})
 	}
+	if o.command == "video create" || o.command == "canvas create" {
+		f.Func("workspace", "", func(id string) error {
+			if !validUUID(id) || (o.workspace != "" && !strings.EqualFold(id, o.workspace)) {
+				return errors.New("invalid workspace")
+			}
+			o.workspace = strings.ToLower(id)
+			return nil
+		})
+	}
 	switch o.command {
 	case "--help", "-h", "help", "video --help", "canvas --help", "auth --help", "video -h", "canvas -h", "auth -h":
 		o.command = "help"
-	case "--version", "models", "auth login", "auth status", "auth logout":
+	case "--version", "models", "auth login", "auth status", "auth logout", "canvas workspaces":
 	case "install":
 		f.StringVar(&o.agent, "agent", "auto", "")
 	case "auth wait":
 		f.DurationVar(&o.timeout, "timeout", 0, "")
+	case "canvas create":
+		o.autoProject = true
+		f.StringVar(&o.run, "run", "", "")
 	case "video create":
 		f.StringVar(&o.spec, "spec", "", "")
 		f.StringVar(&o.run, "run", "", "")
-		f.StringVar(&o.project, "project", "", "")
 	case "video status", "video wait", "video download", "canvas import":
 		f.StringVar(&o.run, "run", "", "")
 		f.StringVar(&o.task, "task", "", "")
@@ -96,8 +146,6 @@ func parseArgs(args []string) (options, *failure) {
 			f.DurationVar(&o.timeout, "timeout", 0, "")
 		case "video download":
 			f.StringVar(&o.out, "out", "", "")
-		case "canvas import":
-			f.StringVar(&o.project, "project", "", "")
 		}
 	default:
 		return o, fail("usage", "Unknown command. See ifytv --help.")
@@ -112,6 +160,10 @@ func parseArgs(args []string) (options, *failure) {
 		return o, fail("invalid_run", "Use a run name of up to 128 letters, numbers, spaces, dots, dashes or underscores.")
 	}
 	switch o.command {
+	case "canvas create":
+		if o.run == "" {
+			return o, fail("usage", "Canvas create requires --run NAME.")
+		}
 	case "auth wait":
 		if o.timeout < 0 {
 			return o, fail("usage", "Use a nonnegative timeout.")
@@ -120,10 +172,18 @@ func parseArgs(args []string) (options, *failure) {
 		if o.run == "" || o.spec == "" {
 			return o, fail("usage", "Video create requires --spec FILE and --run NAME.")
 		}
-		var projectRequested bool
-		f.Visit(func(v *flag.Flag) { projectRequested = projectRequested || v.Name == "project" })
-		if projectRequested && !validUUID(o.project) {
-			return o, fail("invalid_project", "Supply a project UUID with --project.")
+		if projectRequested {
+			if o.project == "auto" {
+				o.autoProject, o.project = true, ""
+			} else {
+				var problem *failure
+				if o.project, problem = projectTarget(o.project); problem != nil {
+					return o, problem
+				}
+			}
+		}
+		if o.workspace != "" && !o.autoProject {
+			return o, fail("usage", "Use --workspace with --project auto.")
 		}
 	case "video status", "video wait", "video download", "canvas import":
 		if (o.run == "") == (o.task == "") {
@@ -132,8 +192,11 @@ func parseArgs(args []string) (options, *failure) {
 		if o.task != "" && !validUUID(o.task) {
 			return o, fail("invalid_task", "Supply a valid task UUID.")
 		}
-		if o.command == "canvas import" && !validUUID(o.project) {
-			return o, fail("invalid_project", "Supply a project UUID with --project.")
+		if o.command == "canvas import" {
+			var problem *failure
+			if o.project, problem = projectTarget(o.project); problem != nil {
+				return o, problem
+			}
 		}
 		if o.command == "video download" && o.out == "" {
 			return o, fail("usage", "Video download requires --out FILE.")
@@ -143,7 +206,6 @@ func parseArgs(args []string) (options, *failure) {
 		}
 	}
 	o.task = strings.ToLower(o.task)
-	o.project = strings.ToLower(o.project)
 	return o, nil
 }
 
@@ -222,10 +284,22 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 		return result, problem
 	case "video create":
 		return c.create(ctx, o)
+	case "canvas create":
+		return c.createCanvasForRun(ctx, o)
+	case "canvas workspaces":
+		workspaces, preferred, problem := c.canvasWorkspaces(ctx)
+		if problem == nil {
+			result.Workspaces, result.DefaultWorkspaceID = &workspaces, preferred
+		}
+		return result, problem
 	}
 	result.Run, result.TaskID, result.ProjectID = o.run, o.task, o.project
 	if o.run != "" {
 		r, problem := c.submittedRun(ctx, o.run)
+		if r != nil && o.command != "canvas import" {
+			result.WorkspaceID = r.WorkspaceID
+			c.addCanvasLocation(&result, r.ProjectID, "")
+		}
 		if problem != nil {
 			return result, problem
 		}
