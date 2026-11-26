@@ -48,28 +48,31 @@ type Task struct {
 
 type output struct {
 	Task
-	TaskID             string             `json:"task_id,omitempty"`
-	Run                string             `json:"run,omitempty"`
-	WorkspaceID        string             `json:"workspace_id,omitempty"`
-	WorkspaceKind      string             `json:"workspace_kind,omitempty"`
-	Workspaces         *[]canvasWorkspace `json:"workspaces,omitempty"`
-	DefaultWorkspaceID string             `json:"default_workspace_id,omitempty"`
-	ProjectID          string             `json:"project_id,omitempty"`
-	NodeID             string             `json:"node_id,omitempty"`
-	AssetID            string             `json:"asset_id,omitempty"`
-	ProjectURL         string             `json:"project_url,omitempty"`
-	Duplicate          *bool              `json:"duplicate,omitempty"`
-	AuthorizationURL   string             `json:"authorization_url,omitempty"`
-	AuthorizationID    string             `json:"authorization_id,omitempty"`
-	UserCode           string             `json:"user_code,omitempty"`
-	Source             string             `json:"source,omitempty"`
-	Path               string             `json:"path,omitempty"`
-	Bytes              int64              `json:"bytes,omitempty"`
-	Models             *[]capability      `json:"models,omitempty"`
-	Version            string             `json:"version,omitempty"`
-	Help               string             `json:"help,omitempty"`
-	Installation       *install.Result    `json:"installation,omitempty"`
-	Error              *failure           `json:"error,omitempty"`
+	TaskID             string                       `json:"task_id,omitempty"`
+	Run                string                       `json:"run,omitempty"`
+	WorkspaceID        string                       `json:"workspace_id,omitempty"`
+	WorkspaceKind      string                       `json:"workspace_kind,omitempty"`
+	Workspaces         *[]canvasWorkspace           `json:"workspaces,omitempty"`
+	DefaultWorkspaceID string                       `json:"default_workspace_id,omitempty"`
+	ProjectID          string                       `json:"project_id,omitempty"`
+	NodeID             string                       `json:"node_id,omitempty"`
+	AssetID            string                       `json:"asset_id,omitempty"`
+	ProjectURL         string                       `json:"project_url,omitempty"`
+	Duplicate          *bool                        `json:"duplicate,omitempty"`
+	AuthorizationURL   string                       `json:"authorization_url,omitempty"`
+	AuthorizationID    string                       `json:"authorization_id,omitempty"`
+	UserCode           string                       `json:"user_code,omitempty"`
+	Source             string                       `json:"source,omitempty"`
+	Path               string                       `json:"path,omitempty"`
+	Bytes              int64                        `json:"bytes,omitempty"`
+	DurationMS         int                          `json:"duration_ms,omitempty"`
+	ShotCount          int                          `json:"shot_count,omitempty"`
+	MediaCapabilities  *productionMediaCapabilities `json:"media_capabilities,omitempty"`
+	Models             *[]capability                `json:"models,omitempty"`
+	Version            string                       `json:"version,omitempty"`
+	Help               string                       `json:"help,omitempty"`
+	Installation       *install.Result              `json:"installation,omitempty"`
+	Error              *failure                     `json:"error,omitempty"`
 }
 
 func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...string) error {
@@ -130,6 +133,18 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 		for _, m := range *result.Models {
 			lines = append(lines, m.ID+"  "+m.DisplayName)
 		}
+	}
+	if caps := result.MediaCapabilities; caps != nil {
+		for _, model := range caps.ImageModels {
+			lines = append(lines, "Image model "+model)
+		}
+		for _, voice := range caps.Voices {
+			lines = append(lines, "Voice "+voice.ID+"  "+voice.Name)
+		}
+		lines = append(lines, fmt.Sprintf("Episode publishing %t", caps.PublishEpisode))
+	}
+	if result.Status == "ready" {
+		lines = append(lines, "Episode export tools are ready.")
 	}
 	if result.Workspaces != nil {
 		for _, workspace := range *result.Workspaces {

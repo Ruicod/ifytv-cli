@@ -105,6 +105,16 @@ ifytv video wait --run shot-07 --authorization-id '<本次ID>' --json
 
 要建在指定团队，先用 `ifytv canvas workspaces --json` 查看可写团队。创建时传入 `--workspace <团队UUID>`，并把列表返回的 `authorization_id` 传给 `--authorization-id`。只说「放到团队」或遇到同名团队时，Agent 会请你指明要用哪个团队。
 
+### 一句话制作漫剧单集（开发版）
+
+> 用「未来来信的邮差」做一集 30 秒竖屏漫剧，有对白和字幕。做好后把 MP4 和画布链接发给我。
+
+把这句话发给安装了 IFYTV Skill 的 Codex 或 Claude Code。Agent 会写剧本和分镜，固定角色外观与音色，补齐分镜图和配音，逐镜生成视频，再合成一份带对白和字幕的 MP4。也可以只指定一步，例如「把这个剧本拆成分镜」或「给这句台词配音」。
+
+整集使用一张画布。给了链接就用原画布，没有链接默认建到「我的画布 → 云端画布」。用户明确指定团队时，才在指定团队新建。每个镜头在原卡显示进度和播放。站点支持整集回写时，Agent 也会给出成片卡链接。
+
+整集功能需要配套开发版 CLI、站点的生图与配音授权，以及本机可用的 FFmpeg 和 ffprobe。`ifytv episode check --json` 可以检查导出环境。Agent 会复用已提供的素材和已完成的镜头。当前公开一行安装的 rc.5 支持前述单镜头功能。[整集操作说明](skills/ifytv/SKILL.md#一句话制作一集漫剧) · [站点接口约定](docs/cli-production-api.md)
+
 ## 直接使用命令行
 
 CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE_URL` 设为该画布的 HTTPS 根地址。新建个人或团队画布需要设备授权。设备凭据按站点保存在本机当前用户的私有目录中。已有自动化可通过 `IFYTV_API_KEY` 操作这把 Key 已获授权的项目。

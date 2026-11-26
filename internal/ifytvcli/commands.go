@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ruicod/ifytv-cli/internal/episode"
 	"github.com/Ruicod/ifytv-cli/internal/install"
 )
 
@@ -29,6 +30,12 @@ ifytv video status (--run NAME | --task UUID) [--json]
 ifytv video wait (--run NAME | --task UUID) [--interval 4s] [--timeout DURATION] [--json]
 ifytv video download (--run NAME | --task UUID) --out FILE [--json]
 ifytv canvas import --project UUID|URL (--run NAME | --task UUID) [--json]
+ifytv media capabilities --authorization-id ID [--json]
+ifytv media generate --project UUID|URL --spec FILE --run NAME --out FILE --authorization-id ID [--timeout DURATION] [--json]
+ifytv media fetch --project UUID|URL --kind image|speech --task UUID --out FILE --authorization-id ID [--timeout DURATION] [--json]
+ifytv episode check [--json]
+ifytv episode export --spec FILE --out FILE [--json]
+ifytv media publish --project UUID|URL --run NAME --file MP4 --authorization-id ID [--json]
 ifytv --version
 
 Install copies this executable and its Agent Skill for the current user.
@@ -36,13 +43,14 @@ The default installs the Skill for Codex, Claude Code and other detected Agents.
 IFYTV_INSTALL_HOME selects a portable installation without changing PATH.
 Sign in with ifytv auth login, open the printed link, then run ifytv auth wait.
 IFYTV_API_KEY overrides the saved login. IFYTV_BASE_URL selects the site.
-Use --authorization-id ID on video and canvas commands to require one specific device approval.
+Use --authorization-id ID on video, canvas and media commands to require one specific device approval.
 New runs use My Canvases in the signed-in account's personal cloud by default.
 Use --project URL or UUID to reuse a cloud canvas. Use --workspace TEAM_UUID
 to create in a particular team, or --no-canvas for a video task without a canvas.
 The canvas shows the references and prompt before generation.
 The same video card shows progress and plays the result. Repeat create with the same
-run name and inputs to resume. IFYTV_STATE_DIR overrides the private run directory.`
+run name and inputs to resume. IFYTV_STATE_DIR overrides the private run directory.
+Episode export uses local FFmpeg and ffprobe. Media commands require site support.`
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var runNamePattern = regexp.MustCompile(`^[\pL\pN_-][\pL\pN\pM ._-]{0,127}$`)
@@ -52,10 +60,10 @@ func validUUID(id string) bool {
 }
 
 type options struct {
-	command, spec, run, task, project, out string
-	authorizationID, agent, workspace      string
-	autoProject, noCanvas                  bool
-	interval, timeout                      time.Duration
+	command, spec, run, task, project, out, file string
+	authorizationID, agent, workspace, kind      string
+	autoProject, noCanvas                        bool
+	interval, timeout                            time.Duration
 }
 
 func projectTarget(value string) (string, *failure) {
@@ -89,14 +97,14 @@ func parseArgs(args []string) (options, *failure) {
 	}
 	o.command = args[0]
 	args = args[1:]
-	if (o.command == "video" || o.command == "canvas" || o.command == "auth") && len(args) > 0 {
+	if (o.command == "video" || o.command == "canvas" || o.command == "auth" || o.command == "media" || o.command == "episode") && len(args) > 0 {
 		o.command += " " + args[0]
 		args = args[1:]
 	}
 	f := flag.NewFlagSet("ifytv", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	projectRequested := false
-	if o.command == "video create" || o.command == "canvas import" {
+	if o.command == "video create" || o.command == "canvas import" || o.command == "media generate" || o.command == "media fetch" || o.command == "media publish" {
 		f.Func("project", "", func(value string) error {
 			if projectRequested && value != o.project {
 				return errors.New("conflicting projects")
@@ -106,7 +114,7 @@ func parseArgs(args []string) (options, *failure) {
 		})
 	}
 	switch o.command {
-	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import", "canvas create", "canvas workspaces":
+	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import", "canvas create", "canvas workspaces", "media capabilities", "media generate", "media fetch", "media publish":
 		f.Func("authorization-id", "", func(id string) error {
 			if !validRunScope(id) || (o.authorizationID != "" && o.authorizationID != id) {
 				return errors.New("invalid authorization ID")
@@ -125,9 +133,26 @@ func parseArgs(args []string) (options, *failure) {
 		})
 	}
 	switch o.command {
-	case "--help", "-h", "help", "video --help", "canvas --help", "auth --help", "video -h", "canvas -h", "auth -h":
+	case "--help", "-h", "help", "video --help", "canvas --help", "auth --help", "video -h", "canvas -h", "auth -h", "media --help", "media -h", "episode --help", "episode -h":
 		o.command = "help"
-	case "--version", "models", "auth login", "auth status", "auth logout", "canvas workspaces":
+	case "--version", "models", "auth login", "auth status", "auth logout", "canvas workspaces", "media capabilities", "episode check":
+	case "episode export":
+		f.StringVar(&o.spec, "spec", "", "")
+		f.StringVar(&o.out, "out", "", "")
+	case "media generate", "media fetch":
+		if o.command == "media generate" {
+			f.StringVar(&o.spec, "spec", "", "")
+			f.StringVar(&o.run, "run", "", "")
+		} else {
+			f.StringVar(&o.task, "task", "", "")
+			f.StringVar(&o.kind, "kind", "", "")
+		}
+		f.StringVar(&o.out, "out", "", "")
+		f.DurationVar(&o.interval, "interval", 3*time.Second, "")
+		f.DurationVar(&o.timeout, "timeout", 20*time.Minute, "")
+	case "media publish":
+		f.StringVar(&o.run, "run", "", "")
+		f.StringVar(&o.file, "file", "", "")
 	case "install":
 		f.StringVar(&o.agent, "agent", "auto", "")
 	case "auth wait":
@@ -161,7 +186,33 @@ func parseArgs(args []string) (options, *failure) {
 	if o.run != "" && (!runNamePattern.MatchString(o.run) || strings.TrimSpace(o.run) != o.run) {
 		return o, fail("invalid_run", "Use a run name of up to 128 letters, numbers, spaces, dots, dashes or underscores.")
 	}
+	if strings.HasPrefix(o.command, "media ") && o.authorizationID == "" {
+		return o, fail("usage", "Supply --authorization-id ID from this browser approval.")
+	}
 	switch o.command {
+	case "episode export":
+		if o.spec == "" || o.out == "" {
+			return o, fail("usage", "Episode export requires --spec FILE and --out FILE.")
+		}
+	case "media generate", "media publish", "media fetch":
+		var problem *failure
+		if o.project, problem = projectTarget(o.project); problem != nil {
+			return o, problem
+		}
+		switch o.command {
+		case "media generate":
+			if o.run == "" || o.spec == "" || o.out == "" || o.interval <= 0 || o.timeout <= 0 {
+				return o, fail("usage", "Media generate requires --run NAME, --spec FILE, --out FILE, and positive poll interval and timeout.")
+			}
+		case "media publish":
+			if o.run == "" || o.file == "" {
+				return o, fail("usage", "Media publish requires --run NAME and --file MP4.")
+			}
+		case "media fetch":
+			if !validUUID(o.task) || (o.kind != "image" && o.kind != "speech") || o.out == "" || o.interval <= 0 || o.timeout <= 0 {
+				return o, fail("usage", "Media fetch requires --task UUID, --kind image or speech, --out FILE, and positive poll interval and timeout.")
+			}
+		}
 	case "canvas create":
 		if o.run == "" {
 			return o, fail("usage", "Canvas create requires --run NAME.")
@@ -239,6 +290,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 			result.Version = version
 		case "install":
 			result.Installation, problem = installCommand(o.agent)
+		case "episode check", "episode export":
+			result, problem = episodeCommand(ctx, o)
 		default:
 			key := os.Getenv("IFYTV_API_KEY")
 			secrets = append(secrets, key)
@@ -262,6 +315,35 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 		return 1
 	}
 	return 0
+}
+
+func episodeCommand(ctx context.Context, o options) (output, *failure) {
+	var result output
+	var err error
+	if o.command == "episode check" {
+		if err = episode.Check(ctx); err == nil {
+			result.Status = "ready"
+		}
+	} else {
+		var exported episode.Result
+		exported, err = episode.Export(ctx, o.spec, o.out)
+		if err == nil {
+			result.Path, result.Bytes = exported.Path, exported.Bytes
+			result.DurationMS, result.ShotCount = exported.DurationMS, exported.Shots
+			result.Status = "succeeded"
+		}
+	}
+	if err == nil {
+		return result, nil
+	}
+	if ctx.Err() != nil {
+		return result, contextFailure(ctx)
+	}
+	var problem *episode.Error
+	if errors.As(err, &problem) {
+		return result, fail(problem.Code, problem.Message)
+	}
+	return result, fail("episode_export_failed", "Could not export the episode.")
 }
 
 func installCommand(agent string) (*install.Result, *failure) {
@@ -291,6 +373,14 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 		return result, problem
 	case "video create":
 		return c.create(ctx, o)
+	case "media capabilities":
+		return c.productionCapabilities(ctx, o)
+	case "media generate":
+		return c.generateProductionMedia(ctx, o)
+	case "media fetch":
+		return c.fetchProductionMedia(ctx, o)
+	case "media publish":
+		return c.publishEpisode(ctx, o)
 	case "canvas create":
 		return c.createCanvasForRun(ctx, o)
 	case "canvas workspaces":

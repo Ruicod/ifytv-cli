@@ -13,7 +13,7 @@ func (c *client) runCommand(ctx context.Context, o options, original output) (ou
 	if o.authorizationID != "" && c.key != "" {
 		return original, authorizationChanged()
 	}
-	if (o.command == "auth wait" || o.command == "video wait") && o.timeout > 0 {
+	if o.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, o.timeout)
 		defer cancel()
