@@ -15,6 +15,13 @@ func (f *stateFile) bindCanvasDestination(r *record, o options) *failure {
 		(o.noCanvas && r.Version != 1) || (o.autoProject && r.Version == 1) {
 		return destinationConflict()
 	}
+	if (o.revision != 0 || o.node != "") &&
+		(r.Version != canvasContinuationVersion || o.revision != r.ExpectedRevision || o.node != r.TargetNodeID) {
+		return destinationConflict()
+	}
+	if r.Version == canvasContinuationVersion && (o.autoProject || o.workspace != "") {
+		return destinationConflict()
+	}
 	if r.Version == 3 && r.ProjectID == "" {
 		// The team-only preview saved the chosen workspace before its first
 		// POST, but didn't record whether it was chosen by the user or by default.
@@ -111,6 +118,10 @@ func (c *client) createCanvasForRun(ctx context.Context, o options) (output, *fa
 	}
 	if r != nil {
 		result.WorkspaceID, result.WorkspaceKind = r.WorkspaceID, r.WorkspaceKind
+		if r.Version == canvasContinuationVersion {
+			c.addCanvasLocation(&result, r.ProjectID, r.TargetNodeID)
+			return result, destinationConflict()
+		}
 	}
 	if problem := file.bindCanvasDestination(r, o); problem != nil {
 		return result, problem

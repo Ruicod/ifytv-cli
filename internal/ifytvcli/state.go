@@ -15,6 +15,8 @@ import (
 	"github.com/Ruicod/ifytv-cli/internal/fileops"
 )
 
+const canvasContinuationVersion = 5
+
 type savedRef struct {
 	Hash string `json:"sha256"`
 	URL  string `json:"url,omitempty"`
@@ -23,6 +25,8 @@ type savedRef struct {
 type record struct {
 	Version            int             `json:"version"`
 	ProjectID          string          `json:"project_id,omitempty"`
+	ExpectedRevision   uint64          `json:"expected_revision,omitempty"`
+	TargetNodeID       string          `json:"target_node_id,omitempty"`
 	WorkspaceID        string          `json:"workspace_id,omitempty"`
 	WorkspaceKind      string          `json:"workspace_kind,omitempty"`
 	RequestedWorkspace string          `json:"requested_workspace_id,omitempty"`
@@ -163,6 +167,9 @@ func (r *record) valid() bool {
 	if r.Version != 4 && r.WorkspaceKind != "" {
 		return false
 	}
+	if r.Version != canvasContinuationVersion && (r.ExpectedRevision != 0 || r.TargetNodeID != "") {
+		return false
+	}
 	switch r.Version {
 	case 1, 2:
 		if r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" || (r.Version == 1 && r.ProjectID != "") || (r.Version == 2 && !validUUID(r.ProjectID)) {
@@ -193,11 +200,20 @@ func (r *record) valid() bool {
 		if r.ProjectID == "" && (r.Stage == "prepared" || r.Stage == "submitted") {
 			return false
 		}
+	case canvasContinuationVersion:
+		if !validUUID(r.ProjectID) || r.ExpectedRevision == 0 || (r.TargetNodeID != "" && !nodePattern.MatchString(r.TargetNodeID)) ||
+			r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" {
+			return false
+		}
 	default:
 		return false
 	}
-	if r.Stage == "video" || (r.Version >= 3 && r.Stage == "canvas") {
-		return r.SpecHash == "" && r.Key == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
+	if r.Stage == "video" || (r.ProjectKey != "" && r.Stage == "canvas") {
+		keyMatches := r.Key == ""
+		if r.Version == canvasContinuationVersion {
+			keyMatches = validUUID(r.Key)
+		}
+		return keyMatches && r.SpecHash == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
 	}
 	if !validUUID(r.Key) || !validHash(r.SpecHash) {
 		return false
@@ -214,7 +230,8 @@ func (r *record) valid() bool {
 		payload := r.Payload
 		if r.ProjectID != "" {
 			var body canvasRunRequest
-			if json.Unmarshal(payload, &body) != nil || len(body.Names) != len(r.Refs) {
+			if json.Unmarshal(payload, &body) != nil || len(body.Names) != len(r.Refs) ||
+				body.ExpectedRevision != r.ExpectedRevision || body.TargetNodeID != r.TargetNodeID {
 				return false
 			}
 			payload = body.Spec
@@ -223,10 +240,21 @@ func (r *record) valid() bool {
 		if json.Unmarshal(payload, &spec) != nil || spec.Model == "" {
 			return false
 		}
+		if r.Version == canvasContinuationVersion {
+			refs := spec.references()
+			if len(refs) != len(r.Refs) {
+				return false
+			}
+			for i, ref := range refs {
+				if *ref.value != r.Refs[i].URL {
+					return false
+				}
+			}
+		}
 		if r.Stage == "prepared" {
 			return r.Task == nil
 		}
-		return r.Task != nil && r.Task.validate("") == nil && r.Task.validateProject(r.ProjectID) == nil
+		return r.Task != nil && r.validateTask(r.Task) == nil
 	}
 	return false
 }

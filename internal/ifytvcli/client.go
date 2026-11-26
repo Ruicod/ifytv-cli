@@ -318,7 +318,7 @@ func (c *client) status(ctx context.Context, id string) (Task, *failure) {
 	return reply.Task, problem
 }
 
-var nodePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
+var nodePattern = regexp.MustCompile(`^[a-zA-Z0-9_-][a-zA-Z0-9_.:-]{0,127}$`)
 
 func (c *client) importVideo(ctx context.Context, result output) (output, *failure) {
 	payload, _ := json.Marshal(struct {

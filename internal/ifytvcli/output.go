@@ -58,6 +58,7 @@ type output struct {
 	NodeID             string                       `json:"node_id,omitempty"`
 	AssetID            string                       `json:"asset_id,omitempty"`
 	ProjectURL         string                       `json:"project_url,omitempty"`
+	Canvas             *canvasSnapshot              `json:"canvas,omitempty"`
 	Duplicate          *bool                        `json:"duplicate,omitempty"`
 	AuthorizationURL   string                       `json:"authorization_url,omitempty"`
 	AuthorizationID    string                       `json:"authorization_id,omitempty"`
@@ -87,7 +88,9 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 			quoted, _ := json.Marshal(key)
 			if key != "" && bytes.Contains(data, quoted[1:len(quoted)-1]) {
 				var value map[string]any
-				if err := json.Unmarshal(data, &value); err != nil {
+				decoder := json.NewDecoder(bytes.NewReader(data))
+				decoder.UseNumber()
+				if err := decoder.Decode(&value); err != nil {
 					return err
 				}
 				for _, secret := range secrets {
@@ -142,6 +145,9 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 			lines = append(lines, "Voice "+voice.ID+"  "+voice.Name)
 		}
 		lines = append(lines, fmt.Sprintf("Episode publishing %t", caps.PublishEpisode))
+	}
+	if snapshot := result.Canvas; snapshot != nil {
+		lines = append(lines, fmt.Sprintf("Canvas %s, revision %d, %d nodes. Use --json for the full snapshot.", snapshot.Title, snapshot.Revision, len(snapshot.Nodes)))
 	}
 	if result.Status == "ready" {
 		lines = append(lines, "Episode export tools are ready.")

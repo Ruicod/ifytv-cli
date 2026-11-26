@@ -44,12 +44,12 @@ type productionMediaCapabilities struct {
 
 func (c *client) requireProductionDevice(o options) *failure {
 	if !validDeviceToken(c.key) || !validRunScope(c.runScope) || !validRunScope(o.authorizationID) {
-		return fail("device_login_required", "Media commands require the pinned browser approval. Sign in and pass its --authorization-id.")
+		return fail("device_login_required", "This command requires the pinned browser approval. Sign in and pass its --authorization-id.")
 	}
 	return nil
 }
 
-// These endpoints return private task data and files. Keep the request chain on
+// These endpoints return private project data and files. Keep the request chain on
 // the site's origin, including redirects, and preserve the site's HTTP client.
 func (c client) productionClient() *client {
 	httpClient := *c.http
@@ -205,17 +205,24 @@ func (c *client) stageProductionMedia(ctx context.Context, result *output, ref r
 		c.addProjectConsent(result, problem)
 		return "", problem
 	}
-	u, err := url.Parse(raw)
-	invalid := fail("invalid_upload_response", "The site did not return a private staging URL for the requested project.")
-	if err != nil || !webURL(u) || origin(u) != origin(c.base) || u.RawPath != "" ||
-		u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") {
-		return "", invalid
-	}
-	id, ok := strings.CutPrefix(u.Path, c.base.Path+endpoint+"/")
-	if !ok || !validUUID(id) {
-		return "", invalid
+	if _, ok := c.productionUploadPath(result.ProjectID, raw); !ok {
+		return "", fail("invalid_upload_response", "The site did not return a private staging URL for the requested project.")
 	}
 	return raw, nil
+}
+
+func (c *client) productionUploadPath(project, raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || !webURL(u) || origin(u) != origin(c.base) || u.RawPath != "" ||
+		u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") {
+		return "", false
+	}
+	endpoint := productionMediaPath(project) + "/uploads/"
+	id, ok := strings.CutPrefix(u.Path, c.base.Path+endpoint)
+	if !ok || !validUUID(id) {
+		return "", false
+	}
+	return endpoint + id, true
 }
 
 // Upload URLs can expire, and a fresh browser approval can issue a different
