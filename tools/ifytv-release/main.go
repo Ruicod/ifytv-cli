@@ -20,6 +20,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Ruicod/ifytv-cli/skills"
 )
 
 const releaseURL = "https://github.com/Ruicod/ifytv-cli/releases/download/v"
@@ -215,7 +217,8 @@ func buildCLI(stage, source, version string, target platform) (archiveEntry, err
 func readSkill() ([]archiveEntry, error) {
 	var entries []archiveEntry
 	// Explicit inputs keep local notes, credentials and example media out of the ZIP.
-	for _, name := range []string{"ifytv/SKILL.md", "ifytv/examples/h3.json"} {
+	for _, path := range skills.ResourcePaths() {
+		name := "ifytv/" + path
 		body, err := os.ReadFile(filepath.Join("skills", filepath.FromSlash(name)))
 		if err != nil {
 			return nil, err

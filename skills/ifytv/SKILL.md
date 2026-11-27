@@ -1,192 +1,121 @@
 ---
 name: ifytv
-description: 用户想在 Codex 或 Claude Code 中用一句话制作 AI 漫剧单集，或处理剧本、分镜、生图、配音、剪辑、视频生成、接手续做半成品云画布、下载或导入成片时使用。
+description: 把一句故事或现有剧本做成短剧、漫剧或单镜视频，在 IFYTV 云画布上完成分镜、角色与场景资产、配音、逐镜生成、整集合成、续做、下载和导入。可用于未指定平台的短剧或漫剧成片需求。不适用于通用剪辑、第三方画布或单纯剧本润色。
 ---
 
-# 用 IFYTV 生成视频和导入画布
+# IFYTV 云画布制作
 
-先从请求识别交付目标，目标明确就继续。只要剧本、角色设定、分镜或提示词，直接完成文本，跳过登录、模型查询和建项目。只要生图或配音时按整集章节相应的素材步骤处理。只要合成已有片段时只运行本地导出检查和合成。用户明确需要保留片段原声时先准备原声轨与对白时间，因为整集导出使用独立的配音素材作为音轨。用户给画布链接并要求接手续做时，从接手章节的云画布读取开始。对已知视频任务，先辨认用户给的是新素材、本机运行名，还是已有任务 ID。同一台机器可用运行名续办，换机器后用任务 UUID，并连接原站点和账号下生成时使用的视频身份。查询、等待、下载和导入各选一个定位参数 `--run` 或 `--task`。
+先确定交付范围。剧本、分镜或提示词只需要文本时，执行第 3 阶段。只查看画布或梳理缺口，执行第 1、2 阶段并交付现状。只做素材、单镜、下载、导入或本地合成时，只运行相关阶段及其前置步骤。用户给画布链接就用原画布，无链接默认建到「我的画布 → 云端画布」，明确指定团队时才选择该团队。只有用户明确只要本地文件时使用本地模式。默认用一张画布承载一集。
 
-## 首次连接账号
+从作品目录执行命令。大写变量见 [接口字段](references/interfaces.md)，作为独立参数传入。预先创建输出父目录，首次使用稳定且未占用的文件名。更新作品状态或提交前取得 [本地写锁](references/recovery.md#作品记录和并发)，只读查看可另存快照。按阶段读取 [资产一致性](references/assets.md) 和 [状态与错误](references/recovery.md)。以下是开发版 CLI 命令，云操作依赖站点支持。公开 rc.5 的单镜用法见接口字段。
 
-由 Agent 运行 `ifytv --version`。如果刚装好且当前进程还查不到命令，或仍显示升级前的版本，直接调用当前用户目录的 `.local/bin/ifytv`（Windows 为 `.local/bin/ifytv.exe`）并核对版本。CLI 默认连接 IFYTV 官网，已有站点或脚本配置也可沿用。查看模型和准备镜头可直接继续。用 `ifytv models --json` 核对模型 ID、模式、时长、画幅与素材数量。
+## 1. 确认能力和授权
 
-用户要求生成、查询、下载或导入时，按下文对应的步骤执行。第一次返回 `authorization_required` 时，保留当前任务的规格、素材、运行名或任务 ID，按以下步骤继续。用户单独要求登录时，用 `ifytv auth login --json` 取得同样的链接。
-
-1. 立即把返回的 `authorization_url` 和 `user_code` 展示在对话中。例如「[打开 IFYTV 授权页](授权链接)，核对设备码和计费账号后点“允许”。我会接着处理刚才的视频。」链接和设备码使用本次响应的实际值。用户在自己的浏览器登录并决定是否允许。
-2. 从这次返回里保留 `authorization_id`。发出链接后，立即运行 `ifytv auth wait --authorization-id <本次ID> --json`。返回 `authenticated` 后，在原命令上加同一个 `--authorization-id <本次ID>` 再执行，保留原来的规格、运行名或任务 ID。这样即使同机另一个对话换号，也只有刚才批准的设备授权能继续这项请求。用户无需回复“好了”。等待中断时也带同一个 ID 继续等待。
-3. `authorization_denied` 表示用户已拒绝，停止该请求。`authorization_expired` 时说明链接已到期，用户要继续时再获取新链接。`authorization_changed` 或 `authorization_scope_changed` 时，停止当前请求并说明授权或计费身份已改变。显式换号前保留原任务，不要去掉授权 ID 重提。只在用户要求断开设备时运行 `ifytv auth logout --json`。
-
-已有设备授权会自动复用。账号密码、视频 Key 和本机凭据都无需发给 Agent，也无需用户打开终端。若旧 CLI 提示 `missing_api_key` 或无法识别 `auth` 命令，请通过站点安装页核对配套版本。若设备接口返回 404，说明当前站点尚未提供该入口，保留原请求以便更新后续办。
-
-用户要求安装时，按项目 README 为当前系统选择一条完整安装命令。安装器会核对平台包并安装匹配版本的 CLI 和 Skill。安装后重新打开 Agent。用户指定了离线正式包或本地候选包时，在核对来源、版本和 SHA-256 后，运行包内可执行文件的 `install` 子命令。[一行安装说明](https://github.com/Ruicod/ifytv-cli#一行安装)
-
-## 接手续做已有云画布（开发版）
-
-用户发来半成品画布并要求「继续」「补剩下的」「接着做第六集」时，先读当前云项目。上一位操作者可以是用户、网页上的协作者或另一个 Agent。只查询一个已知任务时，直接使用原运行名或任务 ID。
-
-1. **确定项目和授权。** 使用用户给的同站云画布链接。按首次连接章节取得当前设备批准的授权 ID。先运行下面的只读命令，再根据画布内容制定计划。画布较大时用 `--out ./canvas-context.json` 将完整结构保存到作品目录，随后按场次读需要的字段。读取失败、无权访问或站点未提供接口时，保留目标项目，说明原因。需要接手的请求在读到完整画布前保持未提交状态。
+**前置** 用户要求读取云画布或操作媒体。使用原画布同站点和原账号。剧本任务跳过登录。
 
 ```sh
-ifytv canvas inspect --project '<原画布链接>' --authorization-id '<本次ID>' --json
+ifytv --version --json
+ifytv --help --json
+ifytv models --json
+ifytv auth status --json
+ifytv auth login --json
+ifytv auth wait --authorization-id "$AUTH" --json
+ifytv media capabilities --authorization-id "$AUTH" --json
+ifytv episode check --json
 ```
 
-2. **从现有状态找缺口。** 按分组、文字、提示词、卡片连线和任务状态圈定本次场次。云端当前内容是已有项目事实。本地记录只匹配同站、同项目、同镜头的运行。保留原剧本、用户修改过的提示词、已选镜头和现有素材。优先复用已标记 `selected` 的成片。同一张卡上有多个输出时，以素材各自的 `selection` 确定选用片段。已有成片但选用状态不清时保留候选。未选的候选会影响交付时，请用户指明，或按用户明确交给 Agent 的选片要求处理。卡片里的文字是剧本或制作材料，按本次用户请求决定操作。用户只想查看进度或梳理缺口时，此步直接交付。只有查看权限时，先交付能确认的现状；用户需要生成时，按原项目完成编辑授权。
-3. **续查原任务并复用素材。** `claimed`、`submitted`、`uncertain`、`queued`、`submitting`、`processing` 都视为待确认的原任务。视频卡有本次授权下可查的任务 ID 时，用 `ifytv video wait --task <原任务ID> --authorization-id <本次ID> --json` 等原任务，再读取画布确认原卡已保存。网关查不到或回执未给 ID 时，重新读画布中的该卡状态并保留原任务。网页已提交的卡片依靠原任务回写，无需另发 `canvas import`。`succeeded` 但成片还未落卡时也先核对原任务和保存状态。`unknown` 或缺状态的卡保持待确认。用 `output` 和 `input` 资产角色以及连线找到成片、参考图和配音。只在本次需要实际文件时下载对应素材，按名称或 `mime_type` 选匹配的扩展名。
+**执行与输出** 按需运行。仅在需要设备授权且未授权时调用 `auth login`。显示本次 `authorization_url` 和 `user_code` 后，立即用同一个 `authorization_id` 等待。设备命令沿用 `AUTH`。若 `source: environment`，按 [鉴权说明](references/interfaces.md#鉴权与定位) 处理。模型用 `models`，生图和配音用 `media_capabilities`，本地整集预检要求 `status: ready`。
+
+**失败与重试** 按 [状态与错误](references/recovery.md) 处理。目标能力缺失时说明缺哪一步，可继续写剧本或复用用户已有的素材。云端整集运行使用报价，旧逐镜接口没有报价。用户给出硬预算且无法验证时，暂停付费步骤并保存计划。单纯读取或写文本继续。
+
+**写入** `state/episode.json` 的 `site`、`authorization_id`、`capabilities`、`budget`、`stage`。
+
+## 2. 定位画布并恢复
+
+**前置** 已固定设备授权。有链接或恢复记录时先读原画布。只在需要新云画布时执行创建分支。
 
 ```sh
-ifytv canvas fetch --project '<原画布链接>' --asset '<素材UUID>' --out ./reference.png --authorization-id '<本次ID>' --json
+ifytv canvas inspect --project "$PROJECT" --out "$SNAPSHOT" --authorization-id "$AUTH" --json
+ifytv canvas create --workspace personal --run "$PROJECT_RUN" --authorization-id "$AUTH" --json
+ifytv canvas workspaces --authorization-id "$AUTH" --json
+ifytv canvas create --workspace "$TEAM" --run "$PROJECT_RUN" --authorization-id "$AUTH" --json
 ```
 
-4. **在原卡补做。** 画布回执的 `can_edit` 为 `true` 时才执行写操作。按需要补齐缺少的图或配音。先核对关联卡和原任务，确认为空再用原项目和角色方案生成。按剧本、现有提示词和 `video_settings` 保留原来选择的模型、时长、画幅等设置，按 `input` 素材在各类型中的顺序保持图片与音频编号。缺少关键设置且无法从剧本或相邻镜头确认时，只询问这项。`draft` 是经站点确认尚未提交的原卡。用正确的 `--node` 和这次读取的 `revision` 继续该卡。失败卡先确认任务已终止并核对用户要求，需重做时沿用该卡并取新的尝试名。剧本中明确缺少该镜头且没有对应卡片时，在下面的命令中只省略 `--node`，用同一个画布和当前 `--revision` 补卡。先把需要的参考素材取到本地，将本地路径写进镜头规格。
+**执行与输出** 先建立快照的父目录，`SNAPSHOT` 每次用未占用的路径。快照含 `revision`、`can_edit`、`groups`、`nodes`、`connections`。保留版本完整整数，按组和实际卡定位场次。团队只用名称或 UUID 唯一匹配的可写团队。新建前保存 `PROJECT_RUN`，确认 `project_id` 后立即给用户画布链接。已有任务 ID 且只要求查询时可直接到第 5 阶段。
+
+**失败与重试** 无编辑权限时可交付只读现状。快照过期重新读取。创建回执丢失时以同工作区、运行名和授权重放。续做时缺完整快照则暂停该画布写入。个别旧卡状态不明时，保留原卡并处理已确认的独立步骤。详见 [恢复顺序](references/recovery.md#恢复顺序)。
+
+**写入** `project_id`、`project_url`、`workspace`、`project_run`、`snapshot_path`、`revision`、`can_edit`。已有画布先记录已选片段、在途任务及不确定节点。
+
+## 3. 固定剧本、分镜和资产表
+
+**前置** 有用户故事或剧本。续做已有项目时以快照和用户指定范围为准。
+
+**执行与输出** Agent 将故事整理成场次、镜头和对白。按首次创作默认约 30 秒、9:16、3–5 个生成镜头，保留用户指定的时长与画幅。每镜包含稳定 `shot_id`、场次、时长、人物/场景/道具 ID、动作、构图、衔接及对白。按镜头查已缓存模型目录，实际时长须落在可用规格内。只有源素材或关键连续性缺失时才做额外关键帧。详细约束见 [资产一致性](references/assets.md)。整集需要上云时，按 [云端整集运行](references/interfaces.md#云端整集运行) 查原集、存计划、报价、恢复和确认成片。站点支持并已采用云端整集时，生成、合成和回写跟同一云端运行，只取回或审核产物。明确缺云端入口且此集没有待确认云端请求时，再走下列逐镜流程。
+
+**失败与重试** 故事约束和模型规格冲突时先调整未提交镜头。核对总时长、台词归属和资源依赖后，固定计划版本。续做时保留用户改过的文本和选片。
+
+**写入** `state/plan.json` 的 `plan_version`、`scenes`、`shots`、`characters`、`locations`、`props`、`dialogue`。在 `state/episode.json` 记 `plan_path`、`stage` 与已映射的画布卡。
+
+## 4. 准备参考图与逐句配音
+
+**前置** 确认所需素材、模型和项目权限，优先用已有资产。生图和配音需要云项目。只交付本地文件时优先用已有素材或用户许可的本地工具，缺失且无法制作时记录缺项，保留本地模式。创建请求前将规格、输出路径和 `RUN` 记录为待确认。
 
 ```sh
-ifytv video create --project '<原画布链接>' --revision 37 --node '<原视频卡ID>' --spec ./shot.json --run episode6-sc014-shot03 --authorization-id '<本次ID>' --json
+ifytv canvas fetch --project "$PROJECT" --asset "$ASSET" --out "$OUT" --authorization-id "$AUTH" --json
+ifytv media generate --project "$PROJECT" --spec "$SPEC" --run "$RUN" --out "$OUT" --authorization-id "$AUTH" --timeout 20m --json
+ifytv media fetch --project "$PROJECT" --kind "$KIND" --task "$TASK" --out "$OUT" --authorization-id "$AUTH" --timeout 20m --json
 ```
 
-把示例版本换成实际回执的版本。每次续做建单前核对最新云端版本。若站点明确返回 `canvas_revision_changed` 或 `canvas_reference_expired`，先重新读取，再按新状态判断还应补什么。站点确认旧请求未建单，当前状态仍需生成时，用最新版本和新的尝试名续做。暂存参考过期时，从原素材重新取回所需文件。若返回 `canvas_node_not_resumable`，重新读取原卡，查看是否应复用新成片或续查原任务。超时或回执丢失后先查原运行和原卡，用原版本、节点、规格、运行名和授权 ID 重试原请求。在已有卡的状态不清或接口不支持时保留原卡，继续续查或报告缺项。授权失败时按原站点的项目授权页完成授权。保存每个实际任务与卡片链接，照常等待原卡、下载和合成。仅查看或梳理已有画布时，返回所需的剧本、进度或缺口即可。
+**执行与输出** 带当前项目的身份取回所需原素材。按 [字段与示例](references/interfaces.md#素材与镜头规格) 写生图或配音 JSON。先定角色基准、场景和道具，必要时用这些图片生成分镜图。每条对白用同角色锁定的音色，验证文件和解码后记录实际长度。成功读取 `path`、`bytes`，有媒体任务时同时记录 `task_id`。
 
-## 一句话制作一集漫剧
+**失败与重试** 已知 ID 时用 `media fetch`。回执未知时，预算和授权能覆盖可能的首次扣费才重放原运行与规格。音频过长先调整镜头或对白，避免截断。参考不一致则复用同一基准补做，终止失败且允许再生成时才开新尝试。详细分支见 [状态与错误](references/recovery.md)。
 
-用户说「用未来来信的邮差做一集 30 秒竖屏漫剧，有对白和字幕，完成后发我成片和画布链接」，按以下流程交付一集。用户只要剧本、角色设定、分镜或提示词时，直接做对应的文本交付。用户只要生图、配音或合成时，只执行请求的阶段。已有剧本、角色图、音频和镜头按用户的要求复用。
+**写入** `state/assets.json` 的实体版本、素材 ID、文件、SHA-256、音色和实际时长。任务写 `state/tasks.json`。
 
-1. **写剧本和分镜。** 采用用户指定的题材、画风、时长和画幅。只给一句故事时，先按约 30 秒、竖屏 9:16 和 3–5 个镜头设计。查站点模型目录后确定实际可生成的镜头时长，按总时长安排镜头。为每个镜头写镜号、画面、运镜、角色、台词及对白时间。固定画风、角色外观和角色音色，后续镜头复用同一套角色、场景和道具参考。
-2. **预检并选画布。** 先确定哪些素材已有、哪些需要生成。整集导出运行 `ifytv episode check --json`。用户明确只要本地 MP4 时，已有片段和配音就直接合成。需要生成新镜头且图片和配音已有，就用 `video create --no-canvas` 后下载。使用设备授权时，建单、等待、下载都传同一个授权 ID。本项目的生图或配音需要云项目，缺少素材时说明这个条件并保留规划。需要云画布时按上节完成设备授权，用 `auth status --json` 取得已批准的授权 ID。运行 `ifytv media capabilities --authorization-id <ID> --json`，选择所缺素材支持的模型和音色。旧站点明确缺少该接口时，素材齐全就继续用已有画布的视频接口和本地导出。遇到登录、权限或网络错误时先处理对应问题。检查通过后，有可编辑同站链接就用原画布。没有链接时按下节在「我的画布 → 云端画布」创建一张，明确指定团队时才在该团队创建。整集只用这一张画布。
-3. **制作素材。** 先完成角色与场景参考图，每张关键帧用原有参考图固定外观。为有对白的镜头按句配音，沿用每个角色的音色。音频先于对应的视频镜头。提交视频前用本机 FFmpeg 的 `-nostdin -v error -xerror -i <本地音频路径> -map 0:a:0 -f null -` 验证配音能完整解码。用 ffprobe 测量实际长度，给完整台词留出足够时间，并核对同镜对白时间无重叠。用户已提供的参考图和配音直接使用。缺的素材按下文规格和实际模型能力生成，记录已完成文件和任务 ID。
-4. **逐镜生成。** 为每个镜头写一份 `video create` 规格，使用同一项目和授权 ID，按序传入参考图与音频。可用音频参考时，把角色、台词、音频序号及说话时间写进提示词。先给用户画布链接，按镜头报告实际阶段。用 `video wait` 确认每张原视频卡已保存，再用 `video download` 保存片段。
-5. **合成和交付。** 按镜号拼接，使用实际配音、对白时间和字幕。预览视频和配音，核对镜头顺序、总长和对应角色，能试听后才报告口型或音色结果。能力回执中的 `media_capabilities.publish_episode` 为 `true` 时，把整集放到同一画布的成片卡并返回卡链接。站点只有逐镜播放时，交付已导出的本地整集 MP4 和逐镜画布链接，说明整集存放位置。
+## 5. 逐镜提交并检查原卡
 
-把剧本、镜头规格和制作记录放进同一个作品目录。在第一次创建项目前保存此次作品唯一的运行名前缀、创建与发布的运行名、站点、原授权 ID 和已有目标。继续记录角色参考、音色和各素材、镜头的运行名与规格。例如作品前缀为 `folded-letter-a71c` 时，可以使用 `folded-letter-a71c-s01-frame`、`folded-letter-a71c-s01-line01`、`folded-letter-a71c-s01-video`。收到项目、任务、原卡或输出文件回执后立即保存。续办先读取作品记录。已确认的本地素材及镜头直接复用。有素材任务 ID 而本地文件缺失时用 `media fetch` 续取，无需再选模型或音色。视频先查原运行，已出片就重新下载原任务。建单回执丢失时，用同一目标、规格、运行名、输出路径和授权 ID 重试。确认生成任务已终止失败且用户要重做时，才为该镜头使用新的尝试名。
-
-### 生图与配音规格
-
-给 `media generate` 的规格文件使用 UTF-8 JSON。下例中的模型和音色换成 `media capabilities` 返回的实际 ID。参考图用相对于规格文件的本地路径。人物资产先生成，再将路径填入分镜图的 `references`。
-
-```json
-{"kind":"image","model":"实际生图模型ID","ratio":"9:16","prompt":"邮差在雨夜打开写着自己名字的信封，冷色国漫画风","references":["./assets/postman.png"]}
-```
-
-```json
-{"kind":"speech","voice":"实际音色ID","text":"最后一封信，是寄给我的。"}
-```
+**前置** 已校验规格、素材顺序和许可范围。已有画布按 [恢复顺序](references/recovery.md#恢复顺序) 逐卡分类。已选成片取回，在途任务续查，明确空卡或可重做的失败卡才能续做。已有项目每次补镜前确认 `can_edit: true` 并刷新 `REVISION`，新项目核对创建回执。
 
 ```sh
-ifytv media generate --project '<项目链接或 UUID>' --spec ./s01-frame.json --run folded-letter-s01-frame --out ./s01.png --authorization-id '<本次ID>' --json
-ifytv media generate --project '<项目链接或 UUID>' --spec ./s01-line01.json --run folded-letter-s01-line01 --out ./s01-line01.mp3 --authorization-id '<本次ID>' --json
+ifytv video status --run "$RUN" --authorization-id "$AUTH" --json
+ifytv video status --task "$TASK" --authorization-id "$AUTH" --json
+ifytv video create --project "$PROJECT" --revision "$REVISION" --node "$NODE" --spec "$SPEC" --run "$RUN" --authorization-id "$AUTH" --json
+ifytv video create --project "$PROJECT" --revision "$REVISION" --spec "$SPEC" --run "$RUN" --authorization-id "$AUTH" --json
+ifytv video create --project "$PROJECT" --spec "$SPEC" --run "$RUN" --authorization-id "$AUTH" --json
+ifytv video create --no-canvas --spec "$SPEC" --run "$RUN" --authorization-id "$AUTH" --json
+ifytv video wait --run "$RUN" --authorization-id "$AUTH" --timeout 20m --json
+ifytv video wait --task "$TASK" --authorization-id "$AUTH" --timeout 20m --json
+ifytv video download --task "$TASK" --out "$OUT" --authorization-id "$AUTH" --json
+ifytv canvas import --project "$PROJECT" --task "$TASK" --authorization-id "$AUTH" --json
 ```
 
-素材已建单后，可以按 `task_id` 继续等待并下载，`--kind` 与原任务一致。
+**执行与输出** 根据目标只选择一条创建命令。无 `--node` 的版本守卫用于确认缺卡的镜头。无 `--revision` 的画布命令用于新画布或明确的单镜新增。本地模式只用于用户明确指定的本地视频。下载使用原任务。`canvas import` 是写入，用于用户指定的已有成片，或确认回执绑定同一项目、任务与卡的 CLI 成片补保存。网页任务按站点回写，等待后重读快照。报告实际 `phase`、`progress` 和 `node_id`。按资产的 `selection: selected` 取用，选片需有用户标记或委托。
+
+**失败与重试** 超时先恢复任务或原运行。收到版本冲突或原卡不可继续时重读快照，核对旧请求是否受理。保留运行及完整参数，禁止用新名字绕过未知结果。下载后检查片段能播放，涉及对白时逐句看嘴型、听声音，无法试听时记为未验证。
+
+**写入** `state/tasks.json` 每镜的 `run`、`attempt`、`spec_path`、`expected_revision`、`task_id`、`node_id`、`status`、`path`、`error_code`。在 `state/plan.json` 记录所选片段、审核和衔接帧。
+
+## 6. 合成与回写
+
+**前置** 全部采用片段已在本地，镜头顺序明确，配音和字幕时间按真实片段核对。用户要保留片段原声时，先查 [导出限制](references/interfaces.md#整集合成规格)。
 
 ```sh
-ifytv media fetch --project '<项目链接或 UUID>' --kind speech --task '<配音任务 ID>' --out ./s01-line01.mp3 --authorization-id '<本次ID>' --json
+ifytv episode export --spec "$EPISODE_SPEC" --out "$FINAL" --json
+ifytv media publish --project "$PROJECT" --file "$FINAL" --run "$PUBLISH_RUN" --authorization-id "$AUTH" --json
 ```
 
-收到项目授权链接时，按原项目完成授权并重试原命令。模型或权限缺失时，保留原项目及已完成素材。
+**执行与输出** `episode export` 返回 `path`、`bytes`、`duration_ms` 和 `shot_count`。核对播放、对白顺序和字幕。`media_capabilities.publish_episode` 为 `true` 且需要回写时，用同一成片文件、同一发布运行名，返回 `project_url`、`node_id` 和 `asset_id`。站点只能播放逐镜时，给用户本地整集和逐镜画布链接。
 
-### 合成整集
+**失败与重试** 合成前保留输入和规格。若已有输出，校验与记录一致后复用。合成失败修复本地输入或环境。回写失败保留本地 MP4，补回写时沿用原项目、字节、发布运行和账号。
 
-将下载的片段按镜号依次写入 `episode.json`。对白的 `start_ms` 和 `end_ms` 相对所在镜头起点，确保完整音频放得下且同镜对白不重叠。字幕使用这些对白的原文和时间。合成保留视频画面，直接将参考配音用作整集对白。用户只要本地 MP4 时，按约定的本地视频模式生成镜头，再合成。
+**写入** `state/episode.json` 的 `export`、`publish`、`stage`，记录规格、MP4 路径、时长、SHA-256、画布卡和验收结果。
 
-```json
-{
-  "ratio":"9:16",
-  "shots":[
-    {"video":"s01.mp4","duration_ms":10000,"dialogue":[{"audio":"s01-line01.mp3","start_ms":500,"end_ms":4000,"text":"最后一封信，是寄给我的。"}]},
-    {"video":"s02.mp4","duration_ms":10000},
-    {"video":"s03.mp4","duration_ms":10000}
-  ]
-}
-```
+## 最小验收
 
-```sh
-ifytv episode export --spec ./episode.json --out ./folded-letter.mp4 --json
-```
-
-站点支持整集回写时运行下面的命令。
-
-```sh
-ifytv media publish --project '<项目链接或 UUID>' --run folded-letter-final --file ./folded-letter.mp4 --authorization-id '<本次ID>' --json
-```
-
-相对路径以规格所在目录为准。整集导出需要本机 FFmpeg、ffprobe 及可显示字幕的字体。公开版 rc.5 可以按下节处理单个现有画布镜头。整集命令需要开发版和配套站点能力。交付时使用导出返回的 `path` 和已确认的 `project_url`。整集回写暂时失败时，先交付本地 MP4 和原项目链接，补回写时使用同一成片文件和发布运行名。
-
-## 在用户的画布上生成
-
-用户要求生成新视频时，按下节准备镜头规格，为镜头选一个固定的运行名。续办已有运行时，沿用原项目、任务和视频卡。用户也要 MP4 时，等原卡出片后下载。只有用户明确只要本地文件时才走下节的 `--no-canvas` 流程。
-
-**给了项目链接时用原画布。** 即使用户同时提到了团队，也优先使用给定的可编辑同站云画布。开发版将完整链接交给 `--project` 校验站点和画布路径。把下面引号内的文字换成用户原链接。若只给了项目 UUID，也可直接传入。已发布的 `v0.2.0-rc.5` 需要先核对链接与 CLI 同站，再从 `/canvas/cloud/<项目UUID>` 取出 UUID 传给 `--project`。跨站、链接无效或没有编辑权限时，报告原链接的问题，保留目标项目。
-
-```sh
-ifytv video create --project '<完整画布链接>' --spec ./shot.json --run shot-07 --json
-```
-
-**没给链接、也没指定团队时，新建到当前登录账号的「我的画布 → 云端画布」。** 换设备登录同一站点和账号也能打开，不依赖当前浏览器的本地存储。直接创建个人画布，无需列出团队或请用户选空间。新运行在配套开发版 CLI 上默认选择个人云端画布。Agent 对两条创建命令都显式写 `--workspace personal`，这样旧团队预览版或 rc.5 会在不支持时报告错误。
-
-首次创建个人视频或空画布前，Agent 先在本机运行 `ifytv auth status --json`。若 `status` 为 `authenticated` 且 `source` 为 `device`，立即保存响应的 `authorization_id`。若为 `signed_out`，执行 `ifytv auth login --json`，按上节展示授权链接并等待。若已有待批准的授权，沿用它的链接和 ID 等待。若 `source` 为 `environment`，按下节的 Key 权限说明处理。取得本次设备授权 ID 后再首次创建，把下面引号中的 ID 换成实际值。首次回执丢失或同机其他对话换号时，所有续查和重试仍传原 ID。
-
-```sh
-ifytv video create --workspace personal --spec ./shot.json --run shot-07 --authorization-id '<本次ID>' --json
-```
-
-用户只想建个人空画布时使用下面的命令。这一步不提交视频任务。断线或收到 `run_pending` 时，用相同运行名和工作区重试原来的 `canvas create`。
-
-```sh
-ifytv canvas create --workspace personal --run storyboard --authorization-id '<本次ID>' --json
-```
-
-**没给链接且明确要求建到团队时，使用用户指定的团队。** 运行 `ifytv canvas workspaces --json`，若已有本次设备授权 ID 也传给它。列表只含可写团队。保存响应的 `authorization_id`，将用户给出的名称或 UUID 与列表精确匹配。唯一匹配时直接使用。仅说「放到团队」或同名团队有多个时，列出名称和 UUID 请用户选择。指定团队不在可写列表中时，说明该账号无法在指定团队创建，保留原目标。对 `video create` 和 `canvas create`，使用 `--workspace <团队UUID> --authorization-id <列表返回的ID>`。视频命令也支持 `--project auto --workspace <团队UUID>`，同样带上该授权 ID。
-
-### 授权和中断恢复
-
-- 新建个人或团队画布都需要设备授权。原始 `IFYTV_API_KEY` 可用于已获授权的项目。用 Key 的用户要新建时，说明原因，由用户决定是否用原站点、原账号和原视频身份完成设备授权。已有项目返回含 `?project=` 的 `authorization_url` 时，请用户授权该项目，然后重试原命令。
-- 遇到 `canvas_workspace_scope_required` 时，在原站点补齐设备权限。有效的旧授权会被 `auth login` 复用，如需注销旧设备授权，先取得用户同意。用原账号和视频身份补授权后，带 `--authorization-id <新授权ID>` 和原运行名继续。
-- 个人创建遇到不支持的参数或接口、`canvas_creation_unavailable`、权限错误、返回不完整或只建好了画布时，保留个人目标及同一次运行，说明已完成哪一步。在原站点更新、补授权或恢复连接后，用相同的 `--workspace personal` 续办。禁止回退到不带工作区的 `--project auto`、不带目标的旧版 `video create`、团队画布或直接视频任务。
-- `legacy_team_confirmation_required` 表示旧团队预览版的这次运行可能已经向某个团队发送过创建请求。把记录中的团队 UUID 告诉用户，等用户明确同意在该团队继续，才用 `--workspace <原团队UUID>` 重试原命令。保留原设备授权和运行名，让 CLI 复用原幂等键。等待确认期间不要向团队提交请求。
-
-CLI 一返回已确认的云画布链接，就发给用户。提交镜头前 CLI 可能先把链接写到标准错误。收到 `task_id` 后，给出任务 ID 和指向原卡的 `project_url`。素材和提示词连接同一张视频卡。运行 `ifytv video wait --run shot-07 --json` 跟进这张卡，已有的授权 ID 也传给等待命令。按站点返回的阶段更新进度，仅在返回 `progress` 时报告百分比。保存完成后给出同一 `node_id` 的播放链接。只拿到保存回执时报告「成片已保存到原卡」，实际打开播放后再报告播放验证结果。
-
-提交视频时若网络中断，先查 `video status --run shot-07`。任务已存在就等原任务，`run_pending` 就用原项目或工作区、规格、素材、运行名及授权重试。遇到项目冲突先核对用户的原意。普通下载任务可在出片后导入，画布生成的同一成片导入原项目会复用原卡。
-
-若模型已出片，但保存时提示空间不足或当日上传额度用完，给用户原卡链接并保留任务 ID。腾出空间或额度恢复后，对原项目和任务执行 `canvas import`，成片会回到这张卡。遇到建单限流则等站点允许后，使用原运行名及规格续办。
-
-## 准备镜头规格与本地下载
-
-例如用户说「用这五张图和三段配音做十秒 H3。修表师、邮差、学徒分别用第一、二、三段声音。我只要本地 MP4，下载到当前目录。」
-
-1. 选一个工作目录，把示例复制为 `shot.json`，按用户提供的文件改写路径。相对路径从 JSON 所在目录解析。示例中的人物、台词和文件名均为虚构，八个素材文件由用户提供。[H3 镜头规格](examples/h3.json)
-2. 建单前列出素材的对应关系。保留用户给的数组顺序，尤其是音频顺序。在提示词中把图片序号、角色、音频序号及其台词写在一起。用户给的绑定明确即可采用，有歧义时再询问。对示例应列出下表。
-
-   | 图片 | 角色或用途 | 参考音频 | 台词 |
-   | --- | --- | --- | --- |
-   | 图 1 | 修表师 | 音频 1 · 01-修表师.mp3 | 几点了？ |
-   | 图 2 | 邮差 | 音频 2 · 02-邮差.mp3 | 刚好三点。 |
-   | 图 3 | 学徒 | 音频 3 · 03-学徒.mp3 | 我来上弦！ |
-   | 图 4 | 钟表铺场景 | — | — |
-   | 图 5 | 怀表道具 | — | — |
-
-3. 只要求准备或检查规格时，交付规格和对应表即可。用户明确只要本地 MP4 时，先用本次要执行的 CLI 运行 `ifytv video create --help`。只要帮助列出 `--no-canvas`，就显式用它上传素材并提交可能计费的视频任务，即使 `ifytv --version` 显示 rc.5 也一样。记录返回的 `task_id`，按同一运行名等待及下载。
-
-```sh
-ifytv video create --no-canvas --spec ./shot.json --run local-07 --json
-ifytv video status --run local-07 --json
-ifytv video wait --run local-07 --json
-ifytv video download --run local-07 --out ./local-07.mp4
-```
-
-仅当用户明确只要本地 MP4、已确认是旧版 `v0.2.0-rc.5`，且本机帮助正常显示、没有 `--no-canvas` 时，才用旧版命令 `ifytv video create --spec ./shot.json --run local-07 --json`。新版的同一写法默认新建个人云端画布。帮助读取失败或版本来源不明时，先核对可执行文件和安装来源，保留原运行。
-
-恢复已有视频运行时，先用 `video status --run` 查询。返回 `run_pending` 表示在当前视频身份下找到了原记录，保留原生成方式、素材、规格和运行名续办。返回 `run_not_found` 时，先核对原站点和身份。同一账号可能有多把视频 Key，设备授权使用第一把可用的视频渠道 Key。旧脚本若使用另一把 Key，需要沿用原凭据或找回原任务 ID 后按原身份查询。查询不到旧记录时直接建单可能重复计费。
-
-已知任务 ID 时可直接续查。等待中断后再次运行 `video wait`。若任务已失败，带上任务 ID 和错误原因给用户。下载时选用户指定的输出位置。模型可能混淆声线或说话人，需要逐句试听成片才能评价实际配音。
-
-## 把已有成片导入云画布
-
-例如用户说「把昨天那个任务放到这个云画布」，并给出项目链接和任务 UUID。开发版同样优先把完整画布链接传给 `--project` 校验。已知项目 UUID 或使用已发布的 rc.5 时可用下面的写法，两个 UUID 换成实际值。
-
-```sh
-ifytv canvas import --project 22222222-2222-4222-8222-222222222222 --task 11111111-1111-4111-8111-111111111111 --json
-```
-
-同一台机器上若只给了运行名，用 `ifytv canvas import --project 22222222-2222-4222-8222-222222222222 --run shot-07 --json`。导入直接使用已有任务。若任务仍在处理中，按原 ID 等待成功再导入。设备授权完成后，如果导入响应给出项目授权链接（`/cli?project=…`），请用户在该页面允许访问目标项目，再对同一项目和任务重试导入。`duplicate: true` 表示已复用原来的视频卡。
-
-交付用户请求的结果。生成时附任务 ID，下载时给出实际 MP4 路径，导入时给出响应中的 `project_url` 与 `node_id`。
+- [ ] 一句故事产生可校验的剧本和 3 个镜头，沿用同一角色基准图及音色。
+- [ ] 已有链接写入原项目。无链接创建到个人云端，明确指定团队才创建到团队。
+- [ ] 已选片段复用，在途镜头按原 ID 查询，确认缺失时才生成；并发、断线重放无重复建单或扣费。
+- [ ] 每句台词核对说话人、音色、口型和字幕；实际不能核对的项目记录为未验证。
+- [ ] 整集 MP4 能播放，回写后刷新能从成片卡播放，重复发布返回同一卡。
+- [ ] 无权限、硬预算无报价和未知任务状态都返回具体阻塞，已有进度可恢复。

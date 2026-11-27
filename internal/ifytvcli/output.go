@@ -68,6 +68,10 @@ type output struct {
 	Bytes              int64                        `json:"bytes,omitempty"`
 	DurationMS         int                          `json:"duration_ms,omitempty"`
 	ShotCount          int                          `json:"shot_count,omitempty"`
+	RequestID          string                       `json:"request_id,omitempty"`
+	EpisodeRun         *productionRun               `json:"episode_run,omitempty"`
+	EpisodeRuns        *productionRunList           `json:"episode_runs,omitempty"`
+	EpisodeQuote       *productionRunQuote          `json:"episode_quote,omitempty"`
 	MediaCapabilities  *productionMediaCapabilities `json:"media_capabilities,omitempty"`
 	Models             *[]capability                `json:"models,omitempty"`
 	Version            string                       `json:"version,omitempty"`
@@ -151,6 +155,29 @@ func render(stdout, stderr io.Writer, result output, jsonMode bool, secrets ...s
 	}
 	if result.Status == "ready" {
 		lines = append(lines, "Episode export tools are ready.")
+	}
+	if result.EpisodeRun != nil {
+		lines = append(lines, "Episode run "+result.EpisodeRun.RunID+" "+result.EpisodeRun.Status)
+	}
+	if result.EpisodeRuns != nil {
+		if result.EpisodeRuns.LookupState != "" {
+			lines = append(lines, "Episode request "+result.EpisodeRuns.LookupState)
+		}
+		for _, run := range result.EpisodeRuns.Items {
+			lines = append(lines, run.RunID+" "+run.Status)
+		}
+	}
+	if result.EpisodeQuote != nil {
+		quote := result.EpisodeQuote
+		lines = append(lines, "Episode quote "+quote.QuoteID+" expires at "+quote.ExpiresAt)
+		if quote.MaxTotalUnits != nil {
+			lines = append(lines, fmt.Sprintf("Maximum: %d %s (site units)", *quote.MaxTotalUnits, quote.Currency))
+		} else {
+			lines = append(lines, "The site did not confirm a total upper bound.")
+		}
+	}
+	if result.RequestID != "" {
+		lines = append(lines, "Episode request ID "+result.RequestID)
 	}
 	if result.Workspaces != nil {
 		for _, workspace := range *result.Workspaces {

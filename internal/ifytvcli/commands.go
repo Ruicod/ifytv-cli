@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +38,10 @@ ifytv media generate --project UUID|URL --spec FILE --run NAME --out FILE --auth
 ifytv media fetch --project UUID|URL --kind image|speech --task UUID --out FILE --authorization-id ID [--timeout DURATION] [--json]
 ifytv episode check [--json]
 ifytv episode export --spec FILE --out FILE [--json]
+ifytv episode plan --project UUID|URL --revision N --spec FILE --request-id UUID [--replay] --authorization-id ID [--json]
+ifytv episode status --project UUID|URL [--run-id UUID | --episode-id UUID | --request-id UUID --operation plan|resume|render|publish] [--cursor CURSOR] --authorization-id ID [--json]
+ifytv episode quote --project UUID|URL --run-id UUID --plan-hash SHA256 [--step-id ID] --authorization-id ID [--json]
+ifytv episode resume --project UUID|URL --run-id UUID --revision N --plan-hash SHA256 --request-id UUID [--quote-id UUID] [--currency CODE --budget-units N] [--step-id ID] [--replay] --authorization-id ID [--json]
 ifytv media publish --project UUID|URL --run NAME --file MP4 --authorization-id ID [--json]
 ifytv --version
 
@@ -72,6 +75,7 @@ type options struct {
 	authorizationID, agent, workspace, kind      string
 	autoProject, noCanvas                        bool
 	interval, timeout                            time.Duration
+	production                                   productionRunOptions
 }
 
 func projectTarget(value string) (string, *failure) {
@@ -113,7 +117,8 @@ func parseArgs(args []string) (options, *failure) {
 	f.SetOutput(io.Discard)
 	projectRequested := false
 	canvasRead := o.command == "canvas inspect" || o.command == "canvas fetch"
-	if canvasRead || o.command == "video create" || o.command == "canvas import" || o.command == "media generate" || o.command == "media fetch" || o.command == "media publish" {
+	productionRun := isProductionRunCommand(o.command)
+	if canvasRead || productionRun || o.command == "video create" || o.command == "canvas import" || o.command == "media generate" || o.command == "media fetch" || o.command == "media publish" {
 		f.Func("project", "", func(value string) error {
 			if projectRequested && value != o.project {
 				return errors.New("conflicting projects")
@@ -123,7 +128,8 @@ func parseArgs(args []string) (options, *failure) {
 		})
 	}
 	switch o.command {
-	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import", "canvas create", "canvas workspaces", "canvas inspect", "canvas fetch", "media capabilities", "media generate", "media fetch", "media publish":
+	case "auth wait", "video create", "video status", "video wait", "video download", "canvas import", "canvas create", "canvas workspaces", "canvas inspect", "canvas fetch", "media capabilities", "media generate", "media fetch", "media publish",
+		"episode plan", "episode status", "episode quote", "episode resume":
 		f.Func("authorization-id", "", func(id string) error {
 			if !validRunScope(id) || (o.authorizationID != "" && o.authorizationID != id) {
 				return errors.New("invalid authorization ID")
@@ -153,6 +159,8 @@ func parseArgs(args []string) (options, *failure) {
 	case "episode export":
 		f.StringVar(&o.spec, "spec", "", "")
 		f.StringVar(&o.out, "out", "", "")
+	case "episode plan", "episode status", "episode quote", "episode resume":
+		addProductionRunFlags(f, &o)
 	case "media generate", "media fetch":
 		if o.command == "media generate" {
 			f.StringVar(&o.spec, "spec", "", "")
@@ -185,14 +193,7 @@ func parseArgs(args []string) (options, *failure) {
 			o.node = value
 			return nil
 		})
-		f.Func("revision", "", func(value string) error {
-			revision, err := strconv.ParseUint(value, 10, 64)
-			if err != nil || revision == 0 || (o.revision != 0 && o.revision != revision) {
-				return errors.New("invalid revision")
-			}
-			o.revision = revision
-			return nil
-		})
+		addRevisionFlag(f, &o)
 	case "video status", "video wait", "video download", "canvas import":
 		f.StringVar(&o.run, "run", "", "")
 		f.StringVar(&o.task, "task", "", "")
@@ -215,7 +216,7 @@ func parseArgs(args []string) (options, *failure) {
 	if o.run != "" && (!runNamePattern.MatchString(o.run) || strings.TrimSpace(o.run) != o.run) {
 		return o, fail("invalid_run", "Use a run name of up to 128 letters, numbers, spaces, dots, dashes or underscores.")
 	}
-	if (canvasRead || strings.HasPrefix(o.command, "media ")) && o.authorizationID == "" {
+	if (canvasRead || productionRun || strings.HasPrefix(o.command, "media ")) && o.authorizationID == "" {
 		return o, fail("usage", "Supply --authorization-id ID from this browser approval.")
 	}
 	switch o.command {
@@ -231,6 +232,10 @@ func parseArgs(args []string) (options, *failure) {
 	case "episode export":
 		if o.spec == "" || o.out == "" {
 			return o, fail("usage", "Episode export requires --spec FILE and --out FILE.")
+		}
+	case "episode plan", "episode status", "episode quote", "episode resume":
+		if problem := validateProductionRunOptions(&o); problem != nil {
+			return o, problem
 		}
 	case "media generate", "media publish", "media fetch":
 		var problem *failure
@@ -326,6 +331,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 	var result output
 	if problem == nil {
 		result.Run, result.TaskID, result.ProjectID, result.AssetID = o.run, o.task, o.project, o.asset
+		result.RequestID = o.production.requestID
 		switch o.command {
 		case "help":
 			result.Help = help
@@ -342,7 +348,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, versi
 			c, problem = newClient(os.Getenv("IFYTV_BASE_URL"), key, o.command != "models")
 			if problem == nil {
 				c.progress = stderr
-				if o.command == "canvas inspect" || o.command == "canvas fetch" {
+				if o.command == "canvas inspect" || o.command == "canvas fetch" || isProductionRunCommand(o.command) {
 					c.addCanvasLocation(&result, o.project, "")
 				}
 				result, problem = c.runCommand(ctx, o, result)
@@ -427,6 +433,8 @@ func (c *client) execute(ctx context.Context, o options) (output, *failure) {
 		return c.fetchProductionMedia(ctx, o)
 	case "media publish":
 		return c.publishEpisode(ctx, o)
+	case "episode plan", "episode status", "episode quote", "episode resume":
+		return c.productionRunCommand(ctx, o)
 	case "canvas create":
 		return c.createCanvasForRun(ctx, o)
 	case "canvas inspect":

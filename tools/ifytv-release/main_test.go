@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ func TestReleaseCommand(t *testing.T) {
 import "embed"
 
 //go:embed ifytv/SKILL.md ifytv/examples/h3.json
+//go:embed ifytv/references/assets.md ifytv/references/interfaces.md ifytv/references/recovery.md
 var Files embed.FS
 `)
 	writeTestFile(t, repo, "cmd/ifytv/main.go", `package main
@@ -63,11 +65,18 @@ func main() {
 	os.Stdout.Write(data)
 }
 `)
-	skill := "---\nname: ifytv\ndescription: Test fixture\n---\n# IFYTV\n"
-	example := "{\n  \"model\": \"test\"\n}\n"
-	writeTestFile(t, repo, "skills/ifytv/SKILL.md", skill)
-	writeTestFile(t, repo, "skills/ifytv/examples/h3.json", example)
+	resources := map[string]string{
+		"ifytv/SKILL.md":                 "---\nname: ifytv\ndescription: Test fixture\n---\n# IFYTV\n",
+		"ifytv/examples/h3.json":         "{\n  \"model\": \"test\"\n}\n",
+		"ifytv/references/assets.md":     "# Asset consistency\n",
+		"ifytv/references/interfaces.md": "# Current interfaces\n",
+		"ifytv/references/recovery.md":   "# Recovery\n",
+	}
+	for name, body := range resources {
+		writeTestFile(t, repo, "skills/"+name, body)
+	}
 	writeTestFile(t, repo, "skills/ifytv/local-notes.txt", "exclude this unrelated file")
+	writeTestFile(t, repo, "skills/ifytv/references/local-notes.md", "exclude this unrelated reference")
 	run := func(t *testing.T, args ...string) (string, error) {
 		t.Helper()
 		cmd := exec.Command(tool, args...)
@@ -95,10 +104,11 @@ func main() {
 			t.Fatal(err)
 		}
 		want := map[string]bool{
-			filepath.FromSlash("cmd/ifytv/main.go"):             true,
-			filepath.FromSlash("skills/embed.go"):               true,
-			filepath.FromSlash("skills/ifytv/SKILL.md"):         true,
-			filepath.FromSlash("skills/ifytv/examples/h3.json"): true,
+			filepath.FromSlash("cmd/ifytv/main.go"): true,
+			filepath.FromSlash("skills/embed.go"):   true,
+		}
+		for name := range resources {
+			want[filepath.FromSlash("skills/"+name)] = true
 		}
 		if !reflect.DeepEqual(files, want) {
 			t.Fatalf("build inputs: got %v, want %v", files, want)
@@ -121,24 +131,24 @@ func main() {
 		out := t.TempDir()
 		pack(t, out)
 		checkDirectory(t, out, "0.1.0", "latest.json")
-		first := checkDistribution(t, out, skill, example)
+		first := checkDistribution(t, out, resources)
 		mustFail(t, "0.1.0", "-version", "0.1.0", "-out", out)
-		if got := checkDistribution(t, out, skill, example); !bytes.Equal(got, first) {
+		if got := checkDistribution(t, out, resources); !bytes.Equal(got, first) {
 			t.Fatal("retry modified the existing distribution")
 		}
 
 		// Release bytes must survive different checkout line endings and staging paths.
-		crlfSkill := strings.ReplaceAll(skill, "\n", "\r\n")
-		crlfExample := strings.ReplaceAll(example, "\n", "\r\n")
-		writeTestFile(t, repo, "skills/ifytv/SKILL.md", crlfSkill)
-		writeTestFile(t, repo, "skills/ifytv/examples/h3.json", crlfExample)
+		for name, body := range resources {
+			writeTestFile(t, repo, "skills/"+name, strings.ReplaceAll(body, "\n", "\r\n"))
+		}
 		secondOut := t.TempDir()
 		pack(t, secondOut)
-		if string(readTestFile(t, filepath.Join(repo, "skills/ifytv/SKILL.md"))) != crlfSkill ||
-			string(readTestFile(t, filepath.Join(repo, "skills/ifytv/examples/h3.json"))) != crlfExample {
-			t.Fatal("packing rewrote the checkout's CRLF resources")
+		for name, body := range resources {
+			if string(readTestFile(t, filepath.Join(repo, "skills", name))) != strings.ReplaceAll(body, "\n", "\r\n") {
+				t.Fatalf("packing rewrote the checkout's CRLF resource %s", name)
+			}
 		}
-		if second := checkDistribution(t, secondOut, skill, example); !bytes.Equal(first, second) {
+		if second := checkDistribution(t, secondOut, resources); !bytes.Equal(first, second) {
 			t.Fatalf("repacking changed asset hashes\n%s\n%s", first, second)
 		}
 	})
@@ -158,7 +168,7 @@ func main() {
 		writeTestFile(t, out, "0.0.9/manifest.json", "previous manifest")
 		pack(t, out)
 		checkDirectory(t, out, "0.0.9", "0.1.0", "latest.json", "saved-entry")
-		checkDistribution(t, out, skill, example)
+		checkDistribution(t, out, resources)
 		if got := string(readTestFile(t, filepath.Join(out, "0.0.9", "manifest.json"))); got != "previous manifest" {
 			t.Fatalf("publishing a new version changed the previous manifest: %q", got)
 		}
@@ -167,7 +177,7 @@ func main() {
 	t.Run("invalid skill fails without publishing", func(t *testing.T) {
 		out := t.TempDir()
 		const name = "skills/ifytv/examples/h3.json"
-		t.Cleanup(func() { writeTestFile(t, repo, name, example) })
+		t.Cleanup(func() { writeTestFile(t, repo, name, resources["ifytv/examples/h3.json"]) })
 		writeTestFile(t, repo, name, "{")
 		mustFail(t, "h3.json", "-version", "0.1.0", "-out", out)
 		checkDirectory(t, out)
@@ -187,7 +197,7 @@ func main() {
 			t.Fatalf("expected one successful packer, got %v and %v", first, second)
 		}
 		checkDirectory(t, out, "0.1.0", "latest.json")
-		checkDistribution(t, out, skill, example)
+		checkDistribution(t, out, resources)
 	})
 
 	t.Run("missing linker version is caught on the host", func(t *testing.T) {
@@ -223,7 +233,7 @@ func main() {
 	})
 }
 
-func checkDistribution(t *testing.T, out, skill, example string) []byte {
+func checkDistribution(t *testing.T, out string, resources map[string]string) []byte {
 	t.Helper()
 	var latest map[string]string
 	if err := json.Unmarshal(readTestFile(t, filepath.Join(out, "latest.json")), &latest); err != nil ||
@@ -284,15 +294,22 @@ func checkDistribution(t *testing.T, out, skill, example string) []byte {
 			t.Fatal(err)
 		}
 		if target[0] == "skill" {
-			if len(z.File) != 2 || z.File[0].Name != "ifytv/SKILL.md" || z.File[1].Name != "ifytv/examples/h3.json" {
+			if len(z.File) != len(resources) {
 				t.Fatalf("unexpected skill ZIP entries: %v", z.File)
 			}
-			if string(readEntry(t, z.File[0], 0644)) != skill || string(readEntry(t, z.File[1], 0644)) != example {
-				t.Fatal("packaged skill text differs from the source")
+			names := make([]string, 0, len(resources))
+			for name := range resources {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for i, name := range names {
+				if z.File[i].Name != name || string(readEntry(t, z.File[i], 0644)) != resources[name] {
+					t.Fatalf("packaged resource %s differs from the source", name)
+				}
 			}
 			continue
 		}
-		checkCLIZIP(t, z, target, skill, example)
+		checkCLIZIP(t, z, target, resources)
 	}
 	for _, target := range [][2]string{{"windows", "arm64"}, {"linux", "arm64"}} {
 		name := "ifytv-0.1.0-" + target[0] + "-" + target[1] + ".zip"
@@ -301,13 +318,13 @@ func checkDistribution(t *testing.T, out, skill, example string) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		checkCLIZIP(t, z, target, skill, example)
+		checkCLIZIP(t, z, target, resources)
 	}
 	checkInstallers(t, dir, doc.Version)
 	return checkReleaseChecksums(t, dir, doc.Version)
 }
 
-func checkCLIZIP(t *testing.T, z *zip.Reader, target [2]string, skill, example string) {
+func checkCLIZIP(t *testing.T, z *zip.Reader, target [2]string, resources map[string]string) {
 	t.Helper()
 	entry := "ifytv"
 	if target[0] == "windows" {
@@ -337,7 +354,7 @@ func checkCLIZIP(t *testing.T, z *zip.Reader, target [2]string, skill, example s
 		if err != nil || strings.TrimSpace(string(version)) != "0.1.0" {
 			t.Fatalf("installed --version: %q (%v)", version, err)
 		}
-		for name, want := range map[string]string{"ifytv/SKILL.md": skill, "ifytv/examples/h3.json": example} {
+		for name, want := range resources {
 			got, err := exec.Command(program, name).Output()
 			if err != nil || string(got) != want {
 				t.Fatalf("embedded %s differs from the canonical Skill: got %q, want %q (%v)", name, got, want, err)

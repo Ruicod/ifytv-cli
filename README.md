@@ -101,7 +101,7 @@ ifytv video create --workspace personal --spec ./shot.json --run shot-07 --autho
 ifytv video wait --run shot-07 --authorization-id '<本次ID>' --json
 ```
 
-只建个人空画布用 `ifytv canvas create --workspace personal --run storyboard --authorization-id '<本次ID>' --json`，这一步不提交视频任务。新版 CLI 的这两条创建命令都默认选个人云端画布。示例显式写出 `--workspace personal`，旧客户端遇到它会提示错误。升级或补授权后沿用原运行名续办。[开发版 Agent 操作说明](skills/ifytv/SKILL.md#在用户的画布上生成) · [镜头规格示例](skills/ifytv/examples/h3.json)
+只建个人空画布用 `ifytv canvas create --workspace personal --run storyboard --authorization-id '<本次ID>' --json`，这一步不提交视频任务。新版 CLI 的这两条创建命令都默认选个人云端画布。示例显式写出 `--workspace personal`，旧客户端遇到它会提示错误。升级或补授权后沿用原运行名续办。[开发版 Agent 操作说明](skills/ifytv/SKILL.md#2-定位画布并恢复) · [镜头规格示例](skills/ifytv/examples/h3.json)
 
 要建在指定团队，先用 `ifytv canvas workspaces --json` 查看可写团队。创建时传入 `--workspace <团队UUID>`，并把列表返回的 `authorization_id` 传给 `--authorization-id`。只说「放到团队」或遇到同名团队时，Agent 会请你指明要用哪个团队。
 
@@ -111,7 +111,7 @@ ifytv video wait --run shot-07 --authorization-id '<本次ID>' --json
 
 把这句话和云画布链接交给 Agent。它先读取画布上的剧本、分组、素材关系和任务状态，再继续原任务或补缺。已选片段直接复用，空的视频卡从原卡继续。只有要用某份图片、配音或视频时，才下载对应文件。
 
-接手续做需要站点提供设备授权的画布读取、素材读取和原卡续做。Agent 用最新画布版本建单，项目有别人的更新时会重新读取。可以单独说「先看一下这张画布还缺哪些镜头」，只读梳理完成后给出缺口。[Skill 续做说明](skills/ifytv/SKILL.md#接手续做已有云画布开发版) · [站点接口约定](docs/cli-canvas-resume-api.md)
+接手续做需要站点提供设备授权的画布读取、素材读取和原卡续做。Agent 用最新画布版本建单，项目有别人的更新时会重新读取。可以单独说「先看一下这张画布还缺哪些镜头」，只读梳理完成后给出缺口。[Skill 续做说明](skills/ifytv/references/recovery.md#恢复顺序) · [站点接口约定](docs/cli-canvas-resume-api.md)
 
 ### 一句话制作漫剧单集（开发版）
 
@@ -121,7 +121,9 @@ ifytv video wait --run shot-07 --authorization-id '<本次ID>' --json
 
 整集使用一张画布。给了链接就用原画布，没有链接默认建到「我的画布 → 云端画布」。用户明确指定团队时，才在指定团队新建。每个镜头在原卡显示进度和播放。站点支持整集回写时，Agent 也会给出成片卡链接。
 
-整集功能需要配套开发版 CLI、站点的生图与配音授权，以及本机可用的 FFmpeg 和 ffprobe。`ifytv episode check --json` 可以检查导出环境。Agent 会复用已提供的素材和已完成的镜头。当前公开一行安装的 rc.5 支持前述单镜头功能。[整集操作说明](skills/ifytv/SKILL.md#一句话制作一集漫剧) · [站点接口约定](docs/cli-production-api.md)
+逐镜合成模式需要配套开发版 CLI、站点的生图与配音授权，以及本机的 FFmpeg 和 ffprobe。`ifytv episode check --json` 可以检查导出环境。Agent 会复用已提供的素材和已完成的镜头。当前公开一行安装的 rc.5 支持前述单镜头功能。[整集操作说明](skills/ifytv/SKILL.md) · [站点接口约定](docs/cli-production-api.md)
+
+开发版 CLI 也提供云端整集入口，配套服务负责保存计划、报价、任务和成片。Dev 测试站点的匿名整集查询返回 HTTP 404。设备授权后的云端接口、完整出片与计费尚未验证。[云端整集编排接口变更单](docs/cli-orchestration-api.md)
 
 ## 直接使用命令行
 
@@ -146,6 +148,21 @@ CLI 默认连接 IFYTV 官网。连接测试或自建站点时，将 `IFYTV_BASE
 创建视频后保留 `task_id`、`node_id` 和 `project_url`。中断后用同一运行名查询，`run_pending` 表示可以沿用原项目、规格、素材及运行名重试。换电脑可用 `--task <任务UUID>` 替代 `--run`，并使用原站点和视频身份。收到项目授权链接时，在浏览器确认后重试原命令。重复导入同一任务会复用原卡。
 
 设备授权使用账号的第一把可用视频 Key。处理旧任务时，沿用创建任务时的视频身份。需要把脚本绑定到一次设备授权时，把响应里的 `authorization_id` 传给 `auth wait` 和后续命令的 `--authorization-id`。[查看完整 Skill 使用说明](https://github.com/Ruicod/ifytv-cli/blob/v0.2.0-rc.5/skills/ifytv/SKILL.md)
+
+### 云端整集命令（开发版）
+
+这些命令需要站点实现整集接口，并使用原站点和项目的设备授权。将 `PROJECT`、`REVISION`、`RUN_ID`、`PLAN_HASH` 和报价值取自快照或回执。先保存两个不同的 UUID，分别标识计划和本次恢复操作。
+
+```sh
+ifytv episode plan --project "$PROJECT" --revision "$REVISION" --spec "$PLAN" --request-id "$PLAN_REQUEST" --authorization-id "$AUTH" --json
+ifytv episode status --project "$PROJECT" --run-id "$RUN_ID" --authorization-id "$AUTH" --json
+ifytv episode quote --project "$PROJECT" --run-id "$RUN_ID" --plan-hash "$PLAN_HASH" --authorization-id "$AUTH" --json
+ifytv episode resume --project "$PROJECT" --run-id "$RUN_ID" --revision "$REVISION" --plan-hash "$PLAN_HASH" --request-id "$RESUME_REQUEST" --quote-id "$QUOTE_ID" --currency "$CURRENCY" --budget-units "$BUDGET_UNITS" --authorization-id "$AUTH" --json
+```
+
+报价只估价，无预扣。按站点返回的币种和额度单位填预算。有步骤费用未知时，报价会省略总额度上界。需要限制步骤时，在 `quote` 或 `resume` 中为每个步骤传一次 `--step-id`。按运行查询详情可传上一页的 `--cursor`。也可按 `--episode-id` 列出同一集的运行。
+
+丢回执时保留原请求键。用 `episode status --request-id` 与原 `--operation` 查受理记录。已受理的回执绑定原请求键、操作、运行 ID 和原请求体 SHA-256，可以继续查原运行。仍为 `uncertain` 时继续核对，只有原操作仍获授权时，才给原 `plan` 或 `resume` 命令加 `--replay`，保持键和参数原样。若返回已封键的 `not_accepted`，核对后经授权才可另开操作。[请求恢复和回执字段](docs/cli-orchestration-api.md#开发版命令)
 
 ## 从源码开发
 
