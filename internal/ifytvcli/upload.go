@@ -63,11 +63,15 @@ func (c *client) checkUpload(ctx context.Context, rawURL, label string) (bool, *
 }
 
 func (c *client) uploadWithRetry(ctx context.Context, ref reference) (string, *failure) {
+	return c.uploadToWithRetry(ctx, "/api/v1/uploads", ref)
+}
+
+func (c *client) uploadToWithRetry(ctx context.Context, endpoint string, ref reference) (string, *failure) {
 	const maxAttempts = 4
 	const maxDelay = 30 * time.Second
 	delay := 250 * time.Millisecond
 	for attempt := 1; ; attempt++ {
-		url, problem := c.upload(ctx, ref)
+		url, problem := c.upload(ctx, endpoint, ref)
 		if problem == nil || problem.HTTPStatus != 429 || attempt == maxAttempts {
 			return url, problem
 		}
@@ -104,7 +108,7 @@ func multipartFrame(ref reference) (head, tail []byte, contentType string, err e
 	return b.Bytes()[:split], b.Bytes()[split:], w.FormDataContentType(), nil
 }
 
-func (c *client) upload(ctx context.Context, ref reference) (string, *failure) {
+func (c *client) upload(ctx context.Context, endpoint string, ref reference) (string, *failure) {
 	file, err := os.Open(ref.path)
 	if err != nil {
 		return "", fail("unreadable_reference", "Cannot open "+ref.label+" for upload.")
@@ -116,7 +120,7 @@ func (c *client) upload(ctx context.Context, ref reference) (string, *failure) {
 	}
 	reader, writer := io.Pipe()
 	defer reader.Close()
-	req, problem := c.request(ctx, "POST", "/api/v1/uploads", reader, true)
+	req, problem := c.request(ctx, "POST", endpoint, reader, true)
 	if problem != nil {
 		writer.Close()
 		return "", problem

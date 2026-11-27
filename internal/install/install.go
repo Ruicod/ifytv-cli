@@ -80,7 +80,7 @@ func Run(home string, skillDirs []string, portable bool) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	for _, path := range []string{"SKILL.md", "examples/h3.json"} {
+	for _, path := range skills.ResourcePaths() {
 		body, err := skills.Files.ReadFile("ifytv/" + path)
 		if err != nil {
 			return result, err

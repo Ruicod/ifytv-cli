@@ -15,20 +15,28 @@ import (
 	"github.com/Ruicod/ifytv-cli/internal/fileops"
 )
 
+const canvasContinuationVersion = 5
+
 type savedRef struct {
 	Hash string `json:"sha256"`
 	URL  string `json:"url,omitempty"`
 }
 
 type record struct {
-	Version   int             `json:"version"`
-	ProjectID string          `json:"project_id,omitempty"`
-	Stage     string          `json:"stage"`
-	SpecHash  string          `json:"spec_sha256"`
-	Key       string          `json:"idempotency_key"`
-	Refs      []savedRef      `json:"references"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Task      *taskReply      `json:"task,omitempty"`
+	Version            int             `json:"version"`
+	ProjectID          string          `json:"project_id,omitempty"`
+	ExpectedRevision   uint64          `json:"expected_revision,omitempty"`
+	TargetNodeID       string          `json:"target_node_id,omitempty"`
+	WorkspaceID        string          `json:"workspace_id,omitempty"`
+	WorkspaceKind      string          `json:"workspace_kind,omitempty"`
+	RequestedWorkspace string          `json:"requested_workspace_id,omitempty"`
+	ProjectKey         string          `json:"project_key,omitempty"`
+	Stage              string          `json:"stage"`
+	SpecHash           string          `json:"spec_sha256"`
+	Key                string          `json:"idempotency_key"`
+	Refs               []savedRef      `json:"references"`
+	Payload            json.RawMessage `json:"payload,omitempty"`
+	Task               *taskReply      `json:"task,omitempty"`
 }
 
 func newKey() (string, error) {
@@ -156,10 +164,58 @@ func validHash(s string) bool {
 }
 
 func (r *record) valid() bool {
-	if !validUUID(r.Key) || !validHash(r.SpecHash) {
+	if r.Version != 4 && r.WorkspaceKind != "" {
 		return false
 	}
-	if (r.ProjectID == "" && r.Version != 1) || (r.ProjectID != "" && (r.Version != 2 || !validUUID(r.ProjectID))) {
+	if r.Version != canvasContinuationVersion && (r.ExpectedRevision != 0 || r.TargetNodeID != "") {
+		return false
+	}
+	switch r.Version {
+	case 1, 2:
+		if r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" || (r.Version == 1 && r.ProjectID != "") || (r.Version == 2 && !validUUID(r.ProjectID)) {
+			return false
+		}
+	case 3, 4:
+		if !validUUID(r.ProjectKey) || r.ProjectKey == r.Key ||
+			(r.RequestedWorkspace != "" && (!validUUID(r.RequestedWorkspace) || r.WorkspaceID != "")) ||
+			(r.WorkspaceID != "" && !validUUID(r.WorkspaceID)) ||
+			(r.ProjectID != "" && (r.WorkspaceID == "" || !validUUID(r.ProjectID))) {
+			return false
+		}
+		if r.Version == 4 {
+			switch r.WorkspaceKind {
+			case personalWorkspaceKind:
+				// The personal route returns both IDs together.
+				if r.RequestedWorkspace != "" || (r.WorkspaceID == "") != (r.ProjectID == "") {
+					return false
+				}
+			case teamWorkspaceKind:
+				if r.WorkspaceID == "" && r.RequestedWorkspace == "" {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		if r.ProjectID == "" && (r.Stage == "prepared" || r.Stage == "submitted") {
+			return false
+		}
+	case canvasContinuationVersion:
+		if !validUUID(r.ProjectID) || r.ExpectedRevision == 0 || (r.TargetNodeID != "" && !nodePattern.MatchString(r.TargetNodeID)) ||
+			r.ProjectKey != "" || r.WorkspaceID != "" || r.RequestedWorkspace != "" {
+			return false
+		}
+	default:
+		return false
+	}
+	if r.Stage == "video" || (r.ProjectKey != "" && r.Stage == "canvas") {
+		keyMatches := r.Key == ""
+		if r.Version == canvasContinuationVersion {
+			keyMatches = validUUID(r.Key)
+		}
+		return keyMatches && r.SpecHash == "" && len(r.Refs) == 0 && len(r.Payload) == 0 && r.Task == nil
+	}
+	if !validUUID(r.Key) || !validHash(r.SpecHash) {
 		return false
 	}
 	for _, ref := range r.Refs {
@@ -174,7 +230,8 @@ func (r *record) valid() bool {
 		payload := r.Payload
 		if r.ProjectID != "" {
 			var body canvasRunRequest
-			if json.Unmarshal(payload, &body) != nil || len(body.Names) != len(r.Refs) {
+			if json.Unmarshal(payload, &body) != nil || len(body.Names) != len(r.Refs) ||
+				body.ExpectedRevision != r.ExpectedRevision || body.TargetNodeID != r.TargetNodeID {
 				return false
 			}
 			payload = body.Spec
@@ -183,10 +240,21 @@ func (r *record) valid() bool {
 		if json.Unmarshal(payload, &spec) != nil || spec.Model == "" {
 			return false
 		}
+		if r.Version == canvasContinuationVersion {
+			refs := spec.references()
+			if len(refs) != len(r.Refs) {
+				return false
+			}
+			for i, ref := range refs {
+				if *ref.value != r.Refs[i].URL {
+					return false
+				}
+			}
+		}
 		if r.Stage == "prepared" {
 			return r.Task == nil
 		}
-		return r.Task != nil && r.Task.validate("") == nil && r.Task.validateProject(r.ProjectID) == nil
+		return r.Task != nil && r.validateTask(r.Task) == nil
 	}
 	return false
 }
@@ -247,7 +315,10 @@ func (c *client) submittedRun(ctx context.Context, name string) (*record, *failu
 		return nil, fail("run_not_found", "No run with this name exists for the current site and key.")
 	}
 	if r.Task == nil {
-		return nil, fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
+		if r.Stage == "canvas" {
+			return r, fail("run_pending", "This run is for a canvas only. Repeat canvas create with the same run name to recover its link.")
+		}
+		return r, fail("run_pending", "The run has no confirmed task ID yet. Repeat video create with the same spec and run.")
 	}
 	return r, nil
 }

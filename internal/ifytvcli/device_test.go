@@ -606,7 +606,7 @@ func TestDeviceBoundWaitAndCreateOnlyUseTheDisplayedAuthorization(t *testing.T) 
 			withImage["images"] = []string{"asset.png"}
 			path := writeSpec(t, dir, withImage)
 			bound := func(id string) invocation {
-				return invoke(context.Background(), "video", "create", "--spec", path, "--run", "same-run", "--authorization-id", id, "--json")
+				return invoke(context.Background(), "video", "create", "--no-canvas", "--spec", path, "--run", "same-run", "--authorization-id", id, "--json")
 			}
 			expectError(t, bound(idA).result(t, false), "authorization_changed")
 			t.Setenv("IFYTV_API_KEY", testKey)

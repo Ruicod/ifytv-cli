@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -211,7 +212,7 @@ func readJSON(r io.Reader, target any) *failure {
 	return nil
 }
 
-func (c *client) json(ctx context.Context, method, path string, payload []byte, key string, auth bool, target any) *failure {
+func (c *client) json(ctx context.Context, method, path string, payload []byte, key string, auth bool, target any, acceptedStatus ...int) *failure {
 	req, problem := c.request(ctx, method, path, bytes.NewReader(payload), auth)
 	if problem != nil {
 		return problem
@@ -231,6 +232,14 @@ func (c *client) json(ctx context.Context, method, path string, payload []byte, 
 		return problem
 	}
 	defer resp.Body.Close()
+	// Media downloads can use a CDN. Authenticated JSON such as team choices
+	// must come from the selected site with the original credential.
+	if auth && (origin(resp.Request.URL) != origin(c.base) || resp.Request.Header.Get("Authorization") != req.Header.Get("Authorization")) {
+		return fail("redirect_rejected", "The site redirected an authenticated API response to a different origin.")
+	}
+	if len(acceptedStatus) > 0 && !slices.Contains(acceptedStatus, resp.StatusCode) {
+		return fail("invalid_response", "The site returned an unexpected success status. Retry the same operation.")
+	}
 	return readJSON(resp.Body, target)
 }
 
@@ -309,7 +318,7 @@ func (c *client) status(ctx context.Context, id string) (Task, *failure) {
 	return reply.Task, problem
 }
 
-var nodePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
+var nodePattern = regexp.MustCompile(`^[a-zA-Z0-9_-][a-zA-Z0-9_.:-]{0,127}$`)
 
 func (c *client) importVideo(ctx context.Context, result output) (output, *failure) {
 	payload, _ := json.Marshal(struct {

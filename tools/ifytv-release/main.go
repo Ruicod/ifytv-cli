@@ -20,6 +20,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Ruicod/ifytv-cli/skills"
 )
 
 const releaseURL = "https://github.com/Ruicod/ifytv-cli/releases/download/v"
@@ -52,10 +54,12 @@ type asset struct {
 }
 
 type manifest struct {
-	Version             string  `json:"version"`
-	DeviceAuthorization bool    `json:"device_authorization"`
-	CanvasGeneration    bool    `json:"canvas_generation"`
-	Assets              []asset `json:"assets"`
+	Version                string  `json:"version"`
+	DeviceAuthorization    bool    `json:"device_authorization"`
+	CanvasGeneration       bool    `json:"canvas_generation"`
+	CanvasProjectCreation  bool    `json:"canvas_project_creation"`
+	PersonalCanvasCreation bool    `json:"personal_canvas_creation"`
+	Assets                 []asset `json:"assets"`
 }
 
 type archiveEntry struct {
@@ -117,7 +121,10 @@ func pack(out, version string) (err error) {
 	if err != nil {
 		return err
 	}
-	doc := manifest{Version: version, DeviceAuthorization: true, CanvasGeneration: true}
+	doc := manifest{
+		Version: version, DeviceAuthorization: true, CanvasGeneration: true,
+		CanvasProjectCreation: true, PersonalCanvasCreation: true,
+	}
 	digests := make(map[platform]string, len(platforms))
 	for _, target := range platforms {
 		program, err := buildCLI(stage, source, version, target)
@@ -210,7 +217,8 @@ func buildCLI(stage, source, version string, target platform) (archiveEntry, err
 func readSkill() ([]archiveEntry, error) {
 	var entries []archiveEntry
 	// Explicit inputs keep local notes, credentials and example media out of the ZIP.
-	for _, name := range []string{"ifytv/SKILL.md", "ifytv/examples/h3.json"} {
+	for _, path := range skills.ResourcePaths() {
+		name := "ifytv/" + path
 		body, err := os.ReadFile(filepath.Join("skills", filepath.FromSlash(name)))
 		if err != nil {
 			return nil, err

@@ -143,7 +143,9 @@ func TestOrderedReferencesDespiteReverseUploadCompletion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	done := make(chan invocation, 1)
-	go func() { done <- invoke(ctx, "video", "create", "--spec", file, "--run", "镜头-7", "--json") }()
+	go func() {
+		done <- invoke(ctx, "video", "create", "--no-canvas", "--spec", file, "--run", "镜头-7", "--json")
+	}()
 	for range 2 {
 		batch := make([]int, 0, 4)
 		for range 4 {
@@ -230,7 +232,7 @@ func TestSharedFourSlotGatewayHonorsRetryAfter(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	v := invoke(ctx, "video", "create", "--spec", writeSpec(t, dir, spec), "--run", "share", "--json")
+	v := invoke(ctx, "video", "create", "--no-canvas", "--spec", writeSpec(t, dir, spec), "--run", "share", "--json")
 	v.result(t, true)
 	if retried.Load() != 1 {
 		t.Fatal("expected one throttled slot to retry", retried.Load())
@@ -275,7 +277,7 @@ func TestUploadBackoffIsBoundedAndRetryUsesSuccessfulCheckpoint(t *testing.T) {
 	file := writeSpec(t, dir, spec)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	v := invoke(ctx, "video", "create", "--spec", file, "--run", "throttled", "--json")
+	v := invoke(ctx, "video", "create", "--no-canvas", "--spec", file, "--run", "throttled", "--json")
 	o := v.result(t, false)
 	attempts := second.Load()
 	if o["error"].(map[string]any)["code"] != "upload_busy" || !strings.Contains(v.out, "image 2") || creates.Load() != 0 || attempts < 2 || attempts > 4 {
@@ -528,7 +530,7 @@ func TestLongRetryAfterReturnsWithoutRetryingEarly(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	o := invoke(ctx, "video", "create", "--spec", writeSpec(t, dir, spec), "--run", "busy", "--json").result(t, false)
+	o := invoke(ctx, "video", "create", "--no-canvas", "--spec", writeSpec(t, dir, spec), "--run", "busy", "--json").result(t, false)
 	if attempts.Load() != 1 || o["error"].(map[string]any)["code"] != "upload_busy" {
 		t.Fatal(o, attempts.Load())
 	}
@@ -555,7 +557,9 @@ func TestConcurrentCreatesShareOneRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out := make(chan invocation, 2)
-	start := func() { out <- invoke(ctx, "video", "create", "--run", "same", "--spec", file, "--json") }
+	start := func() {
+		out <- invoke(ctx, "video", "create", "--no-canvas", "--run", "same", "--spec", file, "--json")
+	}
 	go start()
 	select {
 	case <-entered:

@@ -98,7 +98,7 @@ func writeSpec(t *testing.T, dir string, spec map[string]any) string {
 }
 
 func createRun(spec, run string) invocation {
-	return invoke(context.Background(), "video", "create", "--spec", spec, "--run", run, "--json")
+	return invoke(context.Background(), "video", "create", "--no-canvas", "--spec", spec, "--run", run, "--json")
 }
 
 func TestVersionHelpAndPublicCatalog(t *testing.T) {

@@ -47,9 +47,9 @@ func TestInstallIsOfflineAndIncludesPublishedSkill(t *testing.T) {
 		if !strings.Contains(result.out, root) {
 			t.Fatalf("missing installed Skill path %s in %s", root, result.out)
 		}
-		for _, file := range []string{"SKILL.md", "examples/h3.json"} {
-			want := read(filepath.Join("..", "..", "skills", "ifytv", file))
+		for _, file := range []string{"SKILL.md", "examples/h3.json", "references/assets.md", "references/interfaces.md", "references/recovery.md"} {
 			got := read(filepath.Join(root, file))
+			want := read(filepath.Join("..", "..", "skills", "ifytv", file))
 			if !bytes.Equal(want, got) || bytes.Contains(got, []byte("\r\n")) {
 				t.Fatalf("installed %s is not the published LF file", file)
 			}
